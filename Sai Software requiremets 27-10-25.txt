@@ -1,0 +1,32 @@
+Sauda System
+
+- Rice Lot Purchase entry
+	- Sending Bora
+	- Sending Sticker
+	- Sending FRK
+	- Gate Pass issue
+
+ - reports about all saudas - 
+	- Kitne sauda me bora bhej diye, bhejna baaki 
+ 	- sticker
+	- similar for frk 
+	- similar for Gate pass
+	- similar for lots passed, lot not passed.
+
+	- Rice Lot pass data process
+	- update in sauda
+
+	- finalisation of sauda
+		- moisture, brokerage, QI Exp
+	- posting into ledger of broker
+
+Ledger creation
+Broker accounts 
+	- Rice purchase posting
+	- Payments to broker - cash///// From another broker or party
+	- Receipts from broker - cash///// From another broker or party
+
+
+--- Later ---
+PART 2 --
+Paddy sale module 
