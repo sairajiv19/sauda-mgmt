@@ -23,6 +23,7 @@ class PyObjectId(ObjectId):
 
 class SaudaStatus(str, Enum):
     """Sauda status enum"""
+    INITIATE_PHASE = "Initialized"
     UNKNOWN = "Unknown"
     READY_FOR_PICKUP = "Ready for pickup"
     IN_TRANSPORT = "In transport"
@@ -33,7 +34,6 @@ class BrokerModel(BaseModel):
     """Broker Collection Model"""
     id: Optional[PyObjectId] = Field(default_factory=PyObjectId, alias="_id")
     name: str = Field(..., description="Broker name")
-    party_name: str = Field(..., description="Party or firm name")
     sauda_ids: List[PyObjectId] = Field(default_factory=list, description="Linked deals")
     created_at: datetime = Field(default_factory=datetime.datetime.now(datetime.UTC))
     updated_at: datetime = Field(default_factory=datetime.datetime.now(datetime.UTC))
@@ -55,13 +55,15 @@ class SaudaModel(BaseModel):
     """Sauda (Deal) Collection Model"""
     id: Optional[PyObjectId] = Field(default_factory=PyObjectId, alias="_id")
     name: str = Field(..., description="Sauda/deal name")
+    broker_id: PyObjectId = Field(..., description="The id of the broker in the system.")
+    party_name: str = Field(..., description="Party or firm name")
     date: datetime = Field(..., description="Deal date")
     total_lots: int = Field(..., ge=0, description="Total number of lots")
     rate: float = Field(..., gt=0, description="Rate per quintal/ton")
-    list_of_lot_id: List[PyObjectId] = Field(default_factory=list, description="Lots under this deal")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    # list_of_lot_id: List[PyObjectId] = Field(default_factory=list, description="Lots under this deal")
+    created_at: datetime = Field(default_factory=datetime.datetime.now(datetime.UTC))
     end_at:datetime = Field(None, description="Final date when sauda is complete.")
-    status: str = Field(default=SaudaStatus.UNKNOWN, description="Status of the sauda.")
+    status: str = Field(default=SaudaStatus.INITIATE_PHASE, description="Status of the sauda.")
 
     class Config:
         populate_by_name = True
@@ -88,9 +90,9 @@ class LotModel(BaseModel):
     """Lot Collection Model (Merged Purchase + Cost)"""
     id: Optional[PyObjectId] = Field(default_factory=PyObjectId, alias="_id")
     sauda_id: PyObjectId = Field(..., description="Reference to parent sauda")
-    rice_lot_no: str = Field(..., default=None,  description="Rice lot number")
-    rice_agreement: str = Field(..., default=None, description="Agreement number")
-    rice_type: str = Field(..., default=None, description="Type of rice")
+    rice_lot_no: Optional[str] = Field(..., default=None,  description="Rice lot number")
+    rice_agreement: Optional[str] = Field(..., default=None, description="Agreement number")
+    rice_type: Optional[str] = Field(..., default=None, description="Type of rice")
     
     # FRK and Gate Pass
     frk: bool = Field(default=False, description="FRK status")
