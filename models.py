@@ -1,5 +1,5 @@
-from pydantic import BaseModel, Field
-from typing import Optional, List
+from pydantic import BaseModel, Field, ConfigDict
+from typing import Optional, List, TypedDict
 import datetime
 from bson import ObjectId
 from enum import Enum
@@ -21,21 +21,14 @@ class BrokerModel(BaseModel):
 
     id: Optional[ObjectId] = Field(default_factory=ObjectId, alias="_id")
     name: str = Field(..., description="Broker name")
-    sauda_ids: List[ObjectId] = Field(default_factory=list, description="Linked deals")
+    sauda_ids: List[ObjectId] = Field(default_factory=list, description="Linked saudas")
     created_at: datetime = Field(default_factory=datetime.datetime.now(datetime.UTC))
     updated_at: datetime = Field(default_factory=datetime.datetime.now(datetime.UTC))
 
-    class Config:
-        populate_by_name = True
-        arbitrary_types_allowed = True
-        json_encoders = {ObjectId: str}
-        json_schema_extra = {
-            "example": {
-                "name": "Ramesh Trading Co.",
-                "party_name": "Sharma Exports",
-                "sauda_ids": [],
-            }
-        }
+    model_config=ConfigDict(
+        populate_by_name = True,
+        arbitrary_types_allowed = True,
+        json_encoders = {ObjectId: str},)
 
 
 class SaudaModel(BaseModel):
@@ -43,37 +36,33 @@ class SaudaModel(BaseModel):
 
     id: Optional[ObjectId] = Field(default_factory=ObjectId, alias="_id")
     name: str = Field(..., description="Sauda/deal name")
-    broker_id: ObjectId = Field(..., description="The id of the broker in the system.")
+    broker_id: ObjectId = Field(..., description="The id of the broker in the system.") # Resolve to Name of the broker.
     party_name: str = Field(..., description="Party or firm name")
-    date: datetime = Field(..., description="Deal date")
+    purchase_date: datetime = Field(..., description="Sauda date")
     total_lots: int = Field(..., ge=0, description="Total number of lots")
-    rate: float = Field(..., gt=0, description="Rate per quintal/ton")
+    rate: float = Field(..., gt=0, description="Rate per bora/product")
+    rice_type_and_agreement: Optional[str] = Field(..., default=None, description="Type of rice and Agreement")
+    rice_agreement: Optional[str] = Field(
+        ..., default=None, description="Agreement number"
+    )
     created_at: datetime = Field(default_factory=datetime.datetime.now(datetime.UTC))
     end_at: datetime = Field(None, description="Final date when sauda is complete.")
     status: str = Field(
         default=SaudaStatus.INITIATE_PHASE, description="Status of the sauda."
     )
 
-    class Config:
-        populate_by_name = True
-        arbitrary_types_allowed = True
-        json_encoders = {ObjectId: str}
-        json_schema_extra = {
-            "example": {
-                "name": "Deal 2025-01",
-                "date": "2025-10-27T00:00:00Z",
-                "total_lots": 3,
-                "rate": 2450.50,
-                "list_of_lot_id": [],
-            }
-        }
+    model_config=ConfigDict(
+        populate_by_name = True,
+        arbitrary_types_allowed = True,
+        json_encoders = {ObjectId: str},)
 
 
-class FRKBhejaModel(BaseModel):
+class FRKBhejaModel(TypedDict):
     """FRK Bheja nested model"""
 
-    via: str = Field(..., description="Transport method")
-    qty: float = Field(..., gt=0, description="Quantity sent")
+    frk_via: str  # "Transport method"
+    frk_qty: float # "Quantity sent")
+    frk_date: datetime.datetime # FRK Shipment Date
 
 
 class LotModel(BaseModel):
@@ -82,21 +71,11 @@ class LotModel(BaseModel):
     id: Optional[ObjectId] = Field(default_factory=ObjectId, alias="_id")
     sauda_id: ObjectId = Field(..., description="Reference to parent sauda")
     rice_lot_no: Optional[str] = Field(..., default=None, description="Rice lot number")
-    rice_agreement: Optional[str] = Field(
-        ..., default=None, description="Agreement number"
-    )
-    rice_type: Optional[str] = Field(..., default=None, description="Type of rice")
 
     # FRK and Gate Pass
     frk: bool = Field(default=False, description="FRK status")
     frk_bheja: Optional[FRKBhejaModel] = Field(None, description="FRK shipment details")
-    frk_bheja_date: Optional[datetime.datetime] = Field(
-        None, description="FRK shipment date"
-    )
-    gate_pass_date: Optional[datetime.datetime] = Field(
-        None, description="Gate pass issue date"
-    )
-    gate_pass_via: Optional[str] = Field(None, description="Gate pass location")
+    total_bora_count: Optional[int]
 
     # Purchase + Cost merged fields
     rice_pass_date: Optional[datetime.datetime] = Field(
@@ -120,33 +99,18 @@ class LotModel(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
-    class Config:
-        populate_by_name = True
-        arbitrary_types_allowed = True
-        json_encoders = {ObjectId: str}
-        json_schema_extra = {
-            "example": {
-                "sauda_id": "507f1f77bcf86cd799439011",
-                "rice_lot_no": "RICE-2025-002",
-                "rice_agreement": "AGR-4567",
-                "rice_type": "Basmati",
-                "frk": True,
-                "frk_bheja": {"via": "Truck", "qty": 50},
-                "qtl": 150.25,
-                "rice_bags_quantity": 300,
-                "net_rice_bought": 148.0,
-                "moisture_cut": 2.25,
-                "nett_amount": 367000,
-            }
-        }
+    model_config=ConfigDict(
+        populate_by_name = True,
+        arbitrary_types_allowed = True,
+        json_encoders = {ObjectId: str},)
 
 
-class ProductModel(BaseModel):
-    """Product Collection Model"""
+class ShipmentModel(BaseModel):
+    """Product Shipment Model"""
 
     id: Optional[ObjectId] = Field(default_factory=ObjectId, alias="_id")
     lot_id: ObjectId = Field(..., description="Reference to Lot")
-    total_count: int = Field(..., ge=0, description="Total product count")
+    sent_bora_count: int = Field(..., ge=0, description="Total bora sent")
     shipping_date: Optional[datetime.datetime] = Field(
         None, description="Shipping date"
     )
@@ -155,20 +119,16 @@ class ProductModel(BaseModel):
         None, description="Flap sticker date"
     )
     flap_sticker_t_via: Optional[str] = Field(None, description="Sticker batch info")
+
+    gate_pass_date: Optional[datetime.datetime] = Field(
+        None, description="Gate pass issue date"
+    )
+    gate_pass_via: Optional[str] = Field(None, description="Gate pass location")
+
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
-    class Config:
-        populate_by_name = True
-        arbitrary_types_allowed = True
-        json_encoders = {ObjectId: str}
-        json_schema_extra = {
-            "example": {
-                "lot_id": "507f1f77bcf86cd799439011",
-                "total_count": 280,
-                "shipping_date": "2025-10-23T00:00:00Z",
-                "shipped_via": "Truck - CG07AB1234",
-                "flap_sticker_t_date": "2025-10-24T00:00:00Z",
-                "flap_sticker_t_via": "Sticker Batch #32",
-            }
-        }
+    model_config=ConfigDict(
+        populate_by_name = True,
+        arbitrary_types_allowed = True,
+        json_encoders = {ObjectId: str},)
