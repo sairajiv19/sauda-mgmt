@@ -15,7 +15,7 @@ class FRKBhejaModel(BaseModel):
 
 
 class LotModel(BaseModel):
-    """Lot Collection Model (Merged Purchase + Cost)"""
+    """Lot Collection Model"""
 
     id: Optional[ObjectId] = Field(default_factory=ObjectId, alias="_id")
     sauda_id: ObjectId = Field(..., description="Reference to parent sauda")

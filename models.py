@@ -60,13 +60,13 @@ class SaudaModel(BaseModel):
 class FRKBhejaModel(TypedDict):
     """FRK Bheja nested model"""
 
-    frk_via: str  # "Transport method"
-    frk_qty: float # "Quantity sent")
-    frk_date: datetime.datetime # FRK Shipment Date
+    frk_via: Optional[str]  # "Transport method"
+    frk_qty: Optional[float] # "Quantity sent"
+    frk_date: Optional[datetime.datetime]  # FRK Shipment Date
 
 
 class LotModel(BaseModel):
-    """Lot Collection Model (Merged Purchase + Cost)"""
+    """Lot Collection Model"""
 
     id: Optional[ObjectId] = Field(default_factory=ObjectId, alias="_id")
     sauda_id: ObjectId = Field(..., description="Reference to parent sauda")
@@ -75,9 +75,9 @@ class LotModel(BaseModel):
     # FRK and Gate Pass
     frk: bool = Field(default=False, description="FRK status")
     frk_bheja: Optional[FRKBhejaModel] = Field(None, description="FRK shipment details")
-    total_bora_count: Optional[int]
+    total_bora_count: Optional[int] = Field(..., ge=0, description="No. of Boras in a Lot.")
 
-    # Purchase + Cost merged fields
+    # Govt Website Data
     rice_pass_date: Optional[datetime.datetime] = Field(
         None, description="Rice pass date"
     )
@@ -92,8 +92,8 @@ class LotModel(BaseModel):
     lot_dalali_expense: float = Field(
         default=0, ge=0, description="Dalali/commission expense"
     )
-    other_costs: float = Field(default=0, ge=0, description="Other miscellaneous costs")
-    brokerage: float = Field(default=0, ge=0, description="Brokerage fees")
+    other_expenses: float = Field(default=0, ge=0, description="Other miscellaneous costs")
+    brokerage: float = Field(default=3.00, ge=0, description="Brokerage fees")
     nett_amount: Optional[float] = Field(None, description="Computed total amount")
 
     created_at: datetime = Field(default_factory=datetime.utcnow)
@@ -106,19 +106,19 @@ class LotModel(BaseModel):
 
 
 class ShipmentModel(BaseModel):
-    """Product Shipment Model"""
+    """Lot/Bora Shipment Model"""
 
     id: Optional[ObjectId] = Field(default_factory=ObjectId, alias="_id")
     lot_id: ObjectId = Field(..., description="Reference to Lot")
     sent_bora_count: int = Field(..., ge=0, description="Total bora sent")
-    shipping_date: Optional[datetime.datetime] = Field(
+    bora_date: Optional[datetime.datetime] = Field(
         None, description="Shipping date"
     )
-    shipped_via: Optional[str] = Field(None, description="Shipping method/vehicle")
-    flap_sticker_t_date: Optional[datetime.datetime] = Field(
+    bora_via: Optional[str] = Field(None, description="Shipping method/vehicle")
+    flap_sticker_date: Optional[datetime.datetime] = Field(
         None, description="Flap sticker date"
     )
-    flap_sticker_t_via: Optional[str] = Field(None, description="Sticker batch info")
+    flap_sticker_via: Optional[str] = Field(None, description="Sticker batch info")
 
     gate_pass_date: Optional[datetime.datetime] = Field(
         None, description="Gate pass issue date"
