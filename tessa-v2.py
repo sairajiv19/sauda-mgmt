@@ -9,19 +9,15 @@ from bson import ObjectId
 # ---------------- Models ----------------
 class FRKBhejaModel(BaseModel):
     """FRK Bheja nested model"""
-
     via: str = Field(..., description="Transport method")
     qty: float = Field(..., gt=0, description="Quantity sent")
 
 
 class LotModel(BaseModel):
     """Lot Collection Model"""
-
     id: Optional[ObjectId] = Field(default_factory=ObjectId, alias="_id")
     sauda_id: ObjectId = Field(..., description="Reference to parent sauda")
     rice_lot_no: Optional[str] = Field(None, description="Rice lot number")
-    rice_agreement: Optional[str] = Field(None, description="Agreement number")
-    rice_type: Optional[str] = Field(None, description="Type of rice")
 
     # FRK and Gate Pass
     frk: bool = Field(default=False, description="FRK status")
@@ -32,17 +28,13 @@ class LotModel(BaseModel):
 
     # Purchase + Cost merged fields
     rice_pass_date: Optional[datetime] = Field(None, description="Rice pass date")
-    rice_deposit_centre: Optional[str] = Field(
-        None, description="Storage/deposit location"
-    )
+    rice_deposit_centre: Optional[str] = Field(None, description="Storage/deposit location")
     qtl: float = Field(..., gt=0, description="Quantity in quintals")
     rice_bags_quantity: int = Field(..., ge=0, description="Number of bags")
     net_rice_bought: float = Field(..., gt=0, description="Net rice quantity bought")
     moisture_cut: float = Field(default=0, ge=0, description="Moisture cut amount")
     qi_expense: float = Field(default=0, ge=0, description="QI expense")
-    lot_dalali_expense: float = Field(
-        default=0, ge=0, description="Dalali/commission expense"
-    )
+    lot_dalali_expense: float = Field(default=0, ge=0, description="Dalali/commission expense")
     other_costs: float = Field(default=0, ge=0, description="Other miscellaneous costs")
     brokerage: float = Field(default=0, ge=0, description="Brokerage fees")
     nett_amount: Optional[float] = Field(None, description="Computed total amount")
@@ -53,13 +45,19 @@ class LotModel(BaseModel):
 
 
 class SaudaModel(BaseModel):
+    """Sauda (Deal) Collection Model"""
+    id: Optional[ObjectId] = Field(default_factory=ObjectId, alias="_id")
     name: str = Field(..., description="Sauda/deal name")
-    broker_id: str = Field(..., description="Associated broker ID")
+    broker_id: str = Field(..., description="The id of the broker in the system.")
     party_name: str = Field(..., description="Party or firm name")
-    date_of_purchase: datetime = Field(..., description="Date of deal")
-    total_lots: int = Field(..., ge=0)
-    rate: float = Field(..., gt=0)
-    status: str = Field(default="INITIATE_PHASE")
+    purchase_date: datetime = Field(..., description="Sauda date")
+    total_lots: int = Field(..., ge=0, description="Total number of lots")
+    rate: float = Field(..., gt=0, description="Rate per bora/product")
+    rice_type: Optional[str] = Field(None, description="Type of rice")
+    rice_agreement: Optional[str] = Field(None, description="Agreement number")
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    end_at: Optional[datetime] = Field(None, description="Final date when sauda is complete.")
+    status: str = Field(default="INITIATE_PHASE", description="Status of the sauda.")
     model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
 
 
@@ -74,18 +72,22 @@ initial_saudas = [
         name="Rice Sale A1",
         broker_id="BRK001",
         party_name="Sharma Agro",
-        date_of_purchase=datetime(2025, 10, 1),
+        purchase_date=datetime(2025, 10, 1),
         total_lots=3,
         rate=4200,
+        rice_type="Basmati",
+        rice_agreement="AGR-2025-001",
         status="Pending",
     ),
     SaudaModel(
         name="Rice Deal B5",
         broker_id="BRK002",
         party_name="Gupta Traders",
-        date_of_purchase=datetime(2025, 9, 30),
+        purchase_date=datetime(2025, 9, 30),
         total_lots=2,
         rate=4150,
+        rice_type="Sona Masoori",
+        rice_agreement="AGR-2025-002",
         status="Completed",
     ),
 ]
@@ -117,6 +119,7 @@ if "show_confirmation" not in st.session_state:
     st.session_state["show_confirmation"] = False
 if "pending_changes" not in st.session_state:
     st.session_state["pending_changes"] = {}
+
 
 # ---------------- Custom CSS ----------------
 st.markdown(
@@ -333,15 +336,15 @@ if page == "Sauda Deals":
 
         back_col, _, _ = st.columns([1, 4, 1])
         with back_col:
-            if st.button("← Back to List", use_container_width=True, type="secondary"):
+            if st.button("← Back to Saudas", use_container_width=True, type="secondary"):
                 st.session_state["selected_sauda"] = None
                 st.session_state["selected_lot"] = None
                 st.session_state["edit_mode"] = False
                 st.rerun()
 
         # Display sauda details in card
-        st.markdown("#### Deal Information")
-        info_col1, info_col2, info_col3, info_col4 = st.columns(4)
+        st.markdown("#### Sauda Information")
+        info_col1, info_col2, info_col3, info_col4, info_col5, info_col6 = st.columns(6)
         with info_col1:
             st.metric("Party Name", sauda.party_name)
         with info_col2:
@@ -350,6 +353,10 @@ if page == "Sauda Deals":
             st.metric("Rate", f"₹{sauda.rate:,.2f}")
         with info_col4:
             st.metric("Status", sauda.status)
+        with info_col5:
+            st.metric("Rice Type", sauda.rice_type or "N/A")
+        with info_col6:
+            st.metric("Agreement", sauda.rice_agreement or "N/A")
         st.markdown("</div>", unsafe_allow_html=True)
 
         # Check if a lot is selected
@@ -359,8 +366,8 @@ if page == "Sauda Deals":
             lot_data = get_or_create_lot(sauda.name, lot_number)
 
             # Back to lots button
-            back_to_lots_col, _ = st.columns([1, 5])
-            with back_to_lots_col:
+            back_col, _, edit_col = st.columns([1, 4, 1])
+            with back_col:
                 if st.button(
                     "← Back to Lots", use_container_width=True, type="secondary"
                 ):
@@ -369,12 +376,7 @@ if page == "Sauda Deals":
                     st.session_state["pending_changes"] = {}
                     st.session_state["show_confirmation"] = False
                     st.rerun()
-
-            st.markdown(f"### Lot {lot_number} Details")
-
-            # Edit button
-            edit_col1, edit_col2 = st.columns([5, 1])
-            with edit_col2:
+            with edit_col:
                 if not st.session_state["edit_mode"]:
                     if st.button("✏️ Edit", use_container_width=True, type="primary"):
                         st.session_state["edit_mode"] = True
@@ -388,179 +390,183 @@ if page == "Sauda Deals":
                         st.session_state["show_confirmation"] = False
                         st.rerun()
 
-            # Display lot details
+            st.markdown(f"<h2 style='text-align: center;'>Lot → {lot_data.rice_lot_no or f'Lot {lot_number}'}</h2>", unsafe_allow_html=True)
+            # st.markdown("<h4 style='text-align: center;'>Lot Information</h4>", unsafe_allow_html=True)
+
+            # Edit button
+            edit_col1, edit_col2 = st.columns([5, 1])
 
             if st.session_state["edit_mode"]:
-                # Editable form
-                with st.form("edit_lot_form"):
-                    st.markdown("#### Edit Lot Details")
+                # Editable fields without form
+                st.markdown("#### Edit Lot Details")
 
-                    col1, col2 = st.columns(2)
+                col1, col2 = st.columns(2)
 
-                    rice_lot_no = col1.text_input(
-                        "Rice Lot No", value=lot_data.rice_lot_no or ""
+                rice_lot_no = col1.text_input(
+                    "Rice Lot No", value=lot_data.rice_lot_no or "", key="edit_rice_lot_no"
+                )
+
+                st.markdown("---")
+                st.markdown("**FRK & Gate Pass**")
+
+                frk = st.checkbox("FRK", value=lot_data.frk, key="edit_frk")
+
+                frk_via = ""
+                frk_qty = 0.0
+                frk_bheja_date = None
+                
+                if frk:
+                    frk_col1, frk_col2 = st.columns(2)
+                    frk_via = frk_col1.text_input(
+                        "FRK Via",
+                        value=lot_data.frk_bheja.via if lot_data.frk_bheja else "",
+                        key="edit_frk_via"
                     )
-                    rice_agreement = col2.text_input(
-                        "Rice Agreement", value=lot_data.rice_agreement or ""
-                    )
-                    rice_type = col1.text_input(
-                        "Rice Type", value=lot_data.rice_type or ""
-                    )
-
-                    st.markdown("---")
-                    st.markdown("**FRK & Gate Pass**")
-
-                    frk = st.checkbox("FRK", value=lot_data.frk)
-
-                    if frk:
-                        frk_col1, frk_col2 = st.columns(2)
-                        frk_via = frk_col1.text_input(
-                            "FRK Via",
-                            value=lot_data.frk_bheja.via if lot_data.frk_bheja else "",
-                        )
-                        frk_qty = frk_col2.number_input(
-                            "FRK Qty",
-                            value=(
-                                float(lot_data.frk_bheja.qty)
-                                if lot_data.frk_bheja
-                                else 0.0
-                            ),
-                            min_value=0.0,
-                        )
-                        frk_bheja_date = frk_col1.date_input(
-                            "FRK Bheja Date",
-                            value=(
-                                lot_data.frk_bheja_date.date()
-                                if lot_data.frk_bheja_date
-                                else None
-                            ),
-                        )
-
-                    gate_col1, gate_col2 = st.columns(2)
-                    gate_pass_date = gate_col1.date_input(
-                        "Gate Pass Date",
+                    frk_qty = frk_col2.number_input(
+                        "FRK Qty",
                         value=(
-                            lot_data.gate_pass_date.date()
-                            if lot_data.gate_pass_date
+                            float(lot_data.frk_bheja.qty)
+                            if lot_data.frk_bheja
+                            else 0.0
+                        ),
+                        min_value=0.0,
+                        key="edit_frk_qty"
+                    )
+                    frk_bheja_date = frk_col1.date_input(
+                        "FRK Date",
+                        value=(
+                            lot_data.frk_bheja_date.date()
+                            if lot_data.frk_bheja_date
                             else None
                         ),
-                    )
-                    gate_pass_via = gate_col2.text_input(
-                        "Gate Pass Via", value=lot_data.gate_pass_via or ""
+                        key="edit_frk_date",
+                        format="DD/MM/YYYY"
                     )
 
-                    st.markdown("---")
-                    st.markdown("**Purchase Details**")
+                gate_col1, gate_col2 = st.columns(2)
+                gate_pass_date = gate_col1.date_input(
+                    "Gate Pass Date",
+                    value=(
+                        lot_data.gate_pass_date.date()
+                        if lot_data.gate_pass_date
+                        else None
+                    ),
+                    key="edit_gate_date",
+                    format="DD/MM/YYYY"
+                )
+                gate_pass_via = gate_col2.text_input(
+                    "Gate Pass Via", value=lot_data.gate_pass_via or "", key="edit_gate_via"
+                )
 
-                    purchase_col1, purchase_col2 = st.columns(2)
-                    rice_pass_date = purchase_col1.date_input(
-                        "Rice Pass Date",
-                        value=(
-                            lot_data.rice_pass_date.date()
-                            if lot_data.rice_pass_date
+                st.markdown("---")
+                st.markdown("**Purchase Details**")
+
+                purchase_col1, purchase_col2 = st.columns(2)
+                rice_pass_date = purchase_col1.date_input(
+                    "Rice Pass Date",
+                    value=(
+                        lot_data.rice_pass_date.date()
+                        if lot_data.rice_pass_date
+                        else None
+                    ),
+                    key="edit_rice_pass_date",
+                    format="DD/MM/YYYY"
+                )
+                rice_deposit_centre = purchase_col2.text_input(
+                    "Rice Deposit Centre", value=lot_data.rice_deposit_centre or "", key="edit_deposit"
+                )
+                qtl = purchase_col1.number_input(
+                    "Quantity (Qtl)", value=float(lot_data.qtl), min_value=0.0, key="edit_qtl"
+                )
+                rice_bags_quantity = purchase_col2.number_input(
+                    "Rice Bags Quantity",
+                    value=int(lot_data.rice_bags_quantity),
+                    min_value=0,
+                    key="edit_bags"
+                )
+                net_rice_bought = purchase_col1.number_input(
+                    "Net Rice Bought",
+                    value=float(lot_data.net_rice_bought),
+                    min_value=0.0,
+                    key="edit_net_rice"
+                )
+
+                st.markdown("---")
+                st.markdown("**Cost Details**")
+
+                cost_col1, cost_col2 = st.columns(2)
+                moisture_cut = cost_col1.number_input(
+                    "Moisture Cut",
+                    value=float(lot_data.moisture_cut),
+                    min_value=0.0,
+                    key="edit_moisture"
+                )
+                qi_expense = cost_col2.number_input(
+                    "QI Expense", value=float(lot_data.qi_expense), min_value=0.0, key="edit_qi"
+                )
+                lot_dalali_expense = cost_col1.number_input(
+                    "Dalali Expense",
+                    value=float(lot_data.lot_dalali_expense),
+                    min_value=0.0,
+                    key="edit_dalali"
+                )
+                other_costs = cost_col2.number_input(
+                    "Other Costs", value=float(lot_data.other_costs), min_value=0.0, key="edit_other"
+                )
+                brokerage = cost_col1.number_input(
+                    "Brokerage", value=float(lot_data.brokerage), min_value=0.0, key="edit_brokerage"
+                )
+                nett_amount = cost_col2.number_input(
+                    "Nett Amount",
+                    value=(
+                        float(lot_data.nett_amount) if lot_data.nett_amount else 0.0
+                    ),
+                    min_value=0.0,
+                    key="edit_nett"
+                )
+
+                st.markdown("---")
+                
+                if st.button("💾 Save Changes", use_container_width=True, type="primary", key="save_btn"):
+                    # Store pending changes
+                    st.session_state["pending_changes"] = {
+                        "rice_lot_no": rice_lot_no,
+                        "frk": frk,
+                        "frk_bheja": (
+                            FRKBhejaModel(via=frk_via, qty=frk_qty) if frk else None
+                        ),
+                        "frk_bheja_date": (
+                            datetime.combine(frk_bheja_date, datetime.min.time())
+                            if frk and frk_bheja_date
                             else None
                         ),
-                    )
-                    rice_deposit_centre = purchase_col2.text_input(
-                        "Rice Deposit Centre", value=lot_data.rice_deposit_centre or ""
-                    )
-                    qtl = purchase_col1.number_input(
-                        "Quantity (Qtl)", value=float(lot_data.qtl), min_value=0.0
-                    )
-                    rice_bags_quantity = purchase_col2.number_input(
-                        "Rice Bags Quantity",
-                        value=int(lot_data.rice_bags_quantity),
-                        min_value=0,
-                    )
-                    net_rice_bought = purchase_col1.number_input(
-                        "Net Rice Bought",
-                        value=float(lot_data.net_rice_bought),
-                        min_value=0.0,
-                    )
-
-                    st.markdown("---")
-                    st.markdown("**Cost Details**")
-
-                    cost_col1, cost_col2 = st.columns(2)
-                    moisture_cut = cost_col1.number_input(
-                        "Moisture Cut",
-                        value=float(lot_data.moisture_cut),
-                        min_value=0.0,
-                    )
-                    qi_expense = cost_col2.number_input(
-                        "QI Expense", value=float(lot_data.qi_expense), min_value=0.0
-                    )
-                    lot_dalali_expense = cost_col1.number_input(
-                        "Dalali Expense",
-                        value=float(lot_data.lot_dalali_expense),
-                        min_value=0.0,
-                    )
-                    other_costs = cost_col2.number_input(
-                        "Other Costs", value=float(lot_data.other_costs), min_value=0.0
-                    )
-                    brokerage = cost_col1.number_input(
-                        "Brokerage", value=float(lot_data.brokerage), min_value=0.0
-                    )
-                    nett_amount = cost_col2.number_input(
-                        "Nett Amount",
-                        value=(
-                            float(lot_data.nett_amount) if lot_data.nett_amount else 0.0
+                        "gate_pass_date": (
+                            datetime.combine(gate_pass_date, datetime.min.time())
+                            if gate_pass_date
+                            else None
                         ),
-                        min_value=0.0,
-                    )
-
-                    submitted = st.form_submit_button(
-                        "💾 Save Changes", use_container_width=True, type="primary"
-                    )
-
-                    if submitted:
-                        # Store pending changes
-                        st.session_state["pending_changes"] = {
-                            "rice_lot_no": rice_lot_no,
-                            "rice_agreement": rice_agreement,
-                            "rice_type": rice_type,
-                            "frk": frk,
-                            "frk_bheja": (
-                                FRKBhejaModel(via=frk_via, qty=frk_qty) if frk else None
-                            ),
-                            "frk_bheja_date": (
-                                datetime.combine(frk_bheja_date, datetime.min.time())
-                                if frk and frk_bheja_date
-                                else None
-                            ),
-                            "gate_pass_date": (
-                                datetime.combine(gate_pass_date, datetime.min.time())
-                                if gate_pass_date
-                                else None
-                            ),
-                            "gate_pass_via": gate_pass_via,
-                            "rice_pass_date": (
-                                datetime.combine(rice_pass_date, datetime.min.time())
-                                if rice_pass_date
-                                else None
-                            ),
-                            "rice_deposit_centre": rice_deposit_centre,
-                            "qtl": qtl,
-                            "rice_bags_quantity": rice_bags_quantity,
-                            "net_rice_bought": net_rice_bought,
-                            "moisture_cut": moisture_cut,
-                            "qi_expense": qi_expense,
-                            "lot_dalali_expense": lot_dalali_expense,
-                            "other_costs": other_costs,
-                            "brokerage": brokerage,
-                            "nett_amount": nett_amount,
-                        }
-                        st.session_state["show_confirmation"] = True
-                        st.rerun()
+                        "gate_pass_via": gate_pass_via,
+                        "rice_pass_date": (
+                            datetime.combine(rice_pass_date, datetime.min.time())
+                            if rice_pass_date
+                            else None
+                        ),
+                        "rice_deposit_centre": rice_deposit_centre,
+                        "qtl": qtl,
+                        "rice_bags_quantity": rice_bags_quantity,
+                        "net_rice_bought": net_rice_bought,
+                        "moisture_cut": moisture_cut,
+                        "qi_expense": qi_expense,
+                        "lot_dalali_expense": lot_dalali_expense,
+                        "other_costs": other_costs,
+                        "brokerage": brokerage,
+                        "nett_amount": nett_amount,
+                    }
+                    st.session_state["show_confirmation"] = True
+                    st.rerun()
 
             else:
                 # Display mode
-                st.markdown("#### Lot Information")
-                st.markdown(f"**Rice Lot No:** {lot_data.rice_lot_no or 'N/A'}")
-                st.markdown(f"**Rice Agreement:** {lot_data.rice_agreement or 'N/A'}")
-                st.markdown(f"**Rice Type:** {lot_data.rice_type or 'N/A'}")
-
-                st.markdown("---")
                 st.markdown("#### FRK & Gate Pass")
                 st.markdown(f"**FRK Status:** {'FRK' if lot_data.frk else 'Non FRK'}")
 
@@ -568,18 +574,18 @@ if page == "Sauda Deals":
                     st.markdown(f"**FRK Via:** {lot_data.frk_bheja.via}")
                     st.markdown(f"**FRK Qty:** {lot_data.frk_bheja.qty}")
                     st.markdown(
-                        f"**FRK Bheja Date:** {lot_data.frk_bheja_date.strftime('%Y-%m-%d') if lot_data.frk_bheja_date else 'N/A'}"
+                        f"**FRK Bheja Date:** {lot_data.frk_bheja_date.strftime('%d-%m-%Y') if lot_data.frk_bheja_date else 'N/A'}"
                     )
 
                 st.markdown(
-                    f"**Gate Pass Date:** {lot_data.gate_pass_date.strftime('%Y-%m-%d') if lot_data.gate_pass_date else 'N/A'}"
+                    f"**Gate Pass Date:** {lot_data.gate_pass_date.strftime('%d-%m-%Y') if lot_data.gate_pass_date else 'N/A'}"
                 )
                 st.markdown(f"**Gate Pass Via:** {lot_data.gate_pass_via or 'N/A'}")
 
                 st.markdown("---")
                 st.markdown("#### Purchase Details")
                 st.markdown(
-                    f"**Rice Pass Date:** {lot_data.rice_pass_date.strftime('%Y-%m-%d') if lot_data.rice_pass_date else 'N/A'}"
+                    f"**Rice Pass Date:** {lot_data.rice_pass_date.strftime('%d-%m-%Y') if lot_data.rice_pass_date else 'N/A'}"
                 )
                 st.markdown(
                     f"**Rice Deposit Centre:** {lot_data.rice_deposit_centre or 'N/A'}"
@@ -603,7 +609,7 @@ if page == "Sauda Deals":
 
                 st.markdown("---")
                 st.caption(
-                    f"Created: {lot_data.created_at.strftime('%Y-%m-%d %H:%M')} | Updated: {lot_data.updated_at.strftime('%Y-%m-%d %H:%M')}"
+                    f"Created: {lot_data.created_at.strftime('%d-%m-%Y %H:%M')} | Updated: {lot_data.updated_at.strftime('%d-%m-%Y %H:%M')}"
                 )
 
             # Confirmation dialog at bottom
@@ -681,8 +687,8 @@ if page == "Sauda Deals":
             f"""
         <div class="custom-navbar">
             <div>
-                <div class="navbar-title">Sauda Deals Overview</div>
-                <div class="navbar-subtitle">Manage and track all your deals</div>
+                <div class="navbar-title">Sauda Management Overview</div>
+                <div class="navbar-subtitle">Manage and track all your saudas</div>
             </div>
         </div>
         """,
@@ -710,11 +716,14 @@ if page == "Sauda Deals":
                 st.markdown("#### Add New Sauda")
                 col1, col2 = st.columns(2)
                 name = col1.text_input("Deal Name")
-                broker_id = col2.text_input("Broker ID")
+                broker_options = [broker.broker_id for broker in st.session_state["brokers"]]
+                broker_id = col2.selectbox("Broker ID", options=broker_options)
                 party_name = col1.text_input("Party Name")
-                date_of_purchase = col2.date_input("Date of Purchase", datetime.now())
+                purchase_date = col2.date_input("Purchase Date", datetime.now(), format="DD/MM/YYYY")
                 total_lots = col1.number_input("Total Lots", min_value=0)
                 rate = col2.number_input("Rate ₹", min_value=0.0)
+                rice_type = col1.text_input("Rice Type")
+                rice_agreement = col2.text_input("Rice Agreement")
                 status = st.selectbox(
                     "Status", ["INITIATE_PHASE", "Pending", "Completed", "Cancelled"]
                 )
@@ -728,11 +737,13 @@ if page == "Sauda Deals":
                             name=name,
                             broker_id=broker_id,
                             party_name=party_name,
-                            date_of_purchase=datetime.combine(
-                                date_of_purchase, datetime.min.time()
+                            purchase_date=datetime.combine(
+                                purchase_date, datetime.min.time()
                             ),
                             total_lots=total_lots,
                             rate=rate,
+                            rice_type=rice_type,
+                            rice_agreement=rice_agreement,
                             status=status,
                         )
                         st.session_state["saudas"].append(new_sauda)
@@ -747,7 +758,7 @@ if page == "Sauda Deals":
         st.caption("Click 'View' to manage lots for each deal")
 
         # Table header
-        header_cols = st.columns([2, 1.5, 1.5, 1.5, 1, 1])
+        header_cols = st.columns([2, 1, 1.5, 1, 1, 1, 1, 0.8])
         with header_cols[0]:
             st.markdown("**Name**")
         with header_cols[1]:
@@ -757,15 +768,19 @@ if page == "Sauda Deals":
         with header_cols[3]:
             st.markdown("**Date**")
         with header_cols[4]:
-            st.markdown("**Total Lots**")
+            st.markdown("**Rice Type**")
         with header_cols[5]:
+            st.markdown("**Rice Agreement**")
+        with header_cols[6]:
+            st.markdown("**Total Lots**")
+        with header_cols[7]:
             st.markdown("**Action**")
 
         st.divider()
 
         # Table rows
         for idx, sauda in enumerate(st.session_state["saudas"]):
-            col1, col2, col3, col4, col5, col6 = st.columns([2, 1.5, 1.5, 1.5, 1, 1])
+            col1, col2, col3, col4, col5, col6, col7, col8 = st.columns([2, 1, 1.5, 1, 1, 1, 1, 0.8])
             with col1:
                 st.write(sauda.name)
             with col2:
@@ -773,10 +788,14 @@ if page == "Sauda Deals":
             with col3:
                 st.write(sauda.party_name)
             with col4:
-                st.write(sauda.date_of_purchase.strftime("%Y-%m-%d"))
+                st.write(sauda.purchase_date.strftime("%d-%m-%Y"))
             with col5:
-                st.write(sauda.total_lots)
+                st.write(sauda.rice_type or "N/A")
             with col6:
+                st.write(sauda.rice_agreement or "N/A")
+            with col7:
+                st.write(sauda.total_lots)
+            with col8:
                 if st.button("View →", key=f"view_{idx}", use_container_width=True):
                     st.session_state["selected_sauda"] = idx
                     st.rerun()
@@ -785,6 +804,7 @@ if page == "Sauda Deals":
                 st.divider()
 
         st.markdown("</div>", unsafe_allow_html=True)
+
 
 # ---------------- Broker Page ----------------
 if page == "Brokers":

@@ -41,7 +41,7 @@ class SaudaModel(BaseModel):
     purchase_date: datetime = Field(..., description="Sauda date")
     total_lots: int = Field(..., ge=0, description="Total number of lots")
     rate: float = Field(..., gt=0, description="Rate per bora/product")
-    rice_type_and_agreement: Optional[str] = Field(..., default=None, description="Type of rice and Agreement")
+    rice_type: Optional[str] = Field(..., default=None, description="Type of rice and Agreement")
     rice_agreement: Optional[str] = Field(
         ..., default=None, description="Agreement number"
     )
@@ -76,6 +76,9 @@ class LotModel(BaseModel):
     frk: bool = Field(default=False, description="FRK status")
     frk_bheja: Optional[FRKBhejaModel] = Field(None, description="FRK shipment details")
     total_bora_count: Optional[int] = Field(..., ge=0, description="No. of Boras in a Lot.")
+    shipped_bora_count: Optional[int]
+    remaining_bora_count: Optional[int]
+    is_fully_shipped: bool = Field(default=False, description="Whether the lot is fully shipped or not.")
 
     # Govt Website Data
     rice_pass_date: Optional[datetime.datetime] = Field(
@@ -86,8 +89,10 @@ class LotModel(BaseModel):
     )
     qtl: float = Field(..., gt=0, description="Quantity in quintals")
     rice_bags_quantity: int = Field(..., ge=0, description="Number of bags")
-    net_rice_bought: float = Field(..., gt=0, description="Net rice quantity bought")
     moisture_cut: float = Field(default=0, ge=0, description="Moisture cut amount")
+
+    # Purchase Related information
+    net_rice_bought: float = Field(..., gt=0, description="Net rice quantity bought")
     qi_expense: float = Field(default=0, ge=0, description="QI expense")
     lot_dalali_expense: float = Field(
         default=0, ge=0, description="Dalali/commission expense"
@@ -96,6 +101,7 @@ class LotModel(BaseModel):
     brokerage: float = Field(default=3.00, ge=0, description="Brokerage fees")
     nett_amount: Optional[float] = Field(None, description="Computed total amount")
 
+    # Tracking fields
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
