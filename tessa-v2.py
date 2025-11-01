@@ -1,101 +1,42 @@
 import streamlit as st
 import pandas as pd
-from pydantic import BaseModel, Field, ValidationError, ConfigDict
+from pydantic import ValidationError
 from datetime import datetime, UTC
-from typing import Optional
 from bson import ObjectId
-
-
-# ---------------- Models ----------------
-class FRKBhejaModel(BaseModel):
-    """FRK Bheja nested model"""
-    via: str = Field(..., description="Transport method")
-    qty: float = Field(..., gt=0, description="Quantity sent")
-
-
-class LotModel(BaseModel):
-    """Lot Collection Model"""
-    id: Optional[ObjectId] = Field(default_factory=ObjectId, alias="_id")
-    sauda_id: ObjectId = Field(..., description="Reference to parent sauda")
-    rice_lot_no: Optional[str] = Field(None, description="Rice lot number")
-
-    # FRK and Gate Pass
-    frk: bool = Field(default=False, description="FRK status")
-    frk_bheja: Optional[FRKBhejaModel] = Field(None, description="FRK shipment details")
-    frk_bheja_date: Optional[datetime] = Field(None, description="FRK shipment date")
-    gate_pass_date: Optional[datetime] = Field(None, description="Gate pass issue date")
-    gate_pass_via: Optional[str] = Field(None, description="Gate pass location")
-
-    # Purchase + Cost merged fields
-    rice_pass_date: Optional[datetime] = Field(None, description="Rice pass date")
-    rice_deposit_centre: Optional[str] = Field(None, description="Storage/deposit location")
-    qtl: float = Field(..., gt=0, description="Quantity in quintals")
-    rice_bags_quantity: int = Field(..., ge=0, description="Number of bags")
-    net_rice_bought: float = Field(..., gt=0, description="Net rice quantity bought")
-    moisture_cut: float = Field(default=0, ge=0, description="Moisture cut amount")
-    qi_expense: float = Field(default=0, ge=0, description="QI expense")
-    lot_dalali_expense: float = Field(default=0, ge=0, description="Dalali/commission expense")
-    other_costs: float = Field(default=0, ge=0, description="Other miscellaneous costs")
-    brokerage: float = Field(default=0, ge=0, description="Brokerage fees")
-    nett_amount: Optional[float] = Field(None, description="Computed total amount")
-
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
-    model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
-
-
-class SaudaModel(BaseModel):
-    """Sauda (Deal) Collection Model"""
-    id: Optional[ObjectId] = Field(default_factory=ObjectId, alias="_id")
-    name: str = Field(..., description="Sauda/deal name")
-    broker_id: str = Field(..., description="The id of the broker in the system.")
-    party_name: str = Field(..., description="Party or firm name")
-    purchase_date: datetime = Field(..., description="Sauda date")
-    total_lots: int = Field(..., ge=0, description="Total number of lots")
-    rate: float = Field(..., gt=0, description="Rate per bora/product")
-    rice_type: Optional[str] = Field(None, description="Type of rice")
-    rice_agreement: Optional[str] = Field(None, description="Agreement number")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    end_at: Optional[datetime] = Field(None, description="Final date when sauda is complete.")
-    status: str = Field(default="INITIATE_PHASE", description="Status of the sauda.")
-    model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
-
-
-class BrokerModel(BaseModel):
-    broker_id: str = Field(..., description="Unique broker ID")
-    name: str = Field(..., description="Broker name")
+from models import SaudaModel, SaudaStatus, FRKBhejaModel, LotModel, BrokerModel
 
 
 # ---------------- Fake Data ----------------
 initial_saudas = [
     SaudaModel(
         name="Rice Sale A1",
-        broker_id="BRK001",
+        broker_id="BRK102",  # example ObjectId for BRK001
         party_name="Sharma Agro",
-        purchase_date=datetime(2025, 10, 1),
+        purchase_date=datetime(2025, 10, 1, tzinfo=UTC),
         total_lots=3,
         rate=4200,
         rice_type="Basmati",
         rice_agreement="AGR-2025-001",
-        status="Pending",
+        status=SaudaStatus.IN_TRANSPORT.value,
     ),
     SaudaModel(
         name="Rice Deal B5",
-        broker_id="BRK002",
+        broker_id="BRK101",  # example ObjectId for BRK002
         party_name="Gupta Traders",
-        purchase_date=datetime(2025, 9, 30),
+        purchase_date=datetime(2025, 9, 30, tzinfo=UTC),
         total_lots=2,
         rate=4150,
         rice_type="Sona Masoori",
         rice_agreement="AGR-2025-002",
-        status="Completed",
+        status=SaudaStatus.COMPLETED.value,
     ),
 ]
 
+
 initial_brokers = [
-    BrokerModel(broker_id="BRK001", name="Rajesh Broker"),
-    BrokerModel(broker_id="BRK002", name="Agro Link"),
-    BrokerModel(broker_id="BRK003", name="Vivek Traders"),
+    BrokerModel(broker_id="BRK101", name="Rajesh Broker"),
+    BrokerModel(broker_id="BRK102", name="Agro Link"),
+    BrokerModel(broker_id="BRK103", name="Vivek Traders"),
 ]
 
 # Initialize session data
@@ -810,49 +751,72 @@ if page == "Sauda Deals":
 if page == "Brokers":
     # Custom Navbar for brokers
     st.markdown(
-        f"""
-    <div class="custom-navbar">
-        <div>
-            <div class="navbar-title">Brokers Management</div>
-            <div class="navbar-subtitle">Manage broker information and contacts</div>
+        """
+        <div class="custom-navbar">
+            <div>
+                <div class="navbar-title">Brokers Management</div>
+                <div class="navbar-subtitle">Manage broker information and contacts</div>
+            </div>
         </div>
-    </div>
-    """,
+        """,
         unsafe_allow_html=True,
     )
 
     # Add button row
     _, _, _, _, _, add_col = st.columns([1, 1, 1, 1, 1, 1])
     with add_col:
-        button_label = (
-            "➖ Close Form" if st.session_state["add_broker"] else "➕ Add New Broker"
-        )
         if st.button(
-            button_label, type="primary", key="broker_toggle", use_container_width=True
+            "➖ Close Form" if st.session_state["add_broker"] else "➕ Add New Broker",
+            type="primary",
+            key="broker_toggle",
+            use_container_width=True,
         ):
             st.session_state["add_broker"] = not st.session_state["add_broker"]
             st.rerun()
 
+    # Add broker form
     if st.session_state["add_broker"]:
         with st.form("add_broker_form"):
             st.markdown("#### Add New Broker")
             col1, col2 = st.columns(2)
-            broker_id = col1.text_input("Broker ID")
-            name = col2.text_input("Broker Name")
-            submitted = st.form_submit_button(
-                "✓ Submit Broker", use_container_width=True, type="primary"
-            )
-            if submitted:
+            name = col1.text_input("Broker Name")
+            broker_id_str = col2.text_input("Broker ID")
+            
+            if st.form_submit_button("✓ Submit Broker", use_container_width=True, type="primary"):
                 try:
-                    new_broker = BrokerModel(broker_id=broker_id, name=name)
+                    new_broker = BrokerModel(broker_id=broker_id_str, name=name)
                     st.session_state["brokers"].append(new_broker)
                     st.success(f"✓ Broker '{name}' added successfully!")
                     st.session_state["add_broker"] = False
                     st.rerun()
-                except ValidationError as e:
-                    st.error(str(e))
-        st.markdown("</div>", unsafe_allow_html=True)
+                except Exception as e:
+                    st.error(f"Error: {str(e)}")
 
-    df_b = pd.DataFrame([b.model_dump() for b in st.session_state["brokers"]])
-    st.write(style_dataframe(df_b).to_html(), unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
+    # Display brokers table - only name, ID, and count
+    st.caption("Broker list with sauda counts")
+    
+    # Table header
+    header_cols = st.columns([1, 1, 1, 2])
+    with header_cols[0]:
+        st.markdown("**Broker Name**")
+    with header_cols[1]:
+        st.markdown("**Broker ID**")
+    with header_cols[2]:
+        st.markdown("**Total Saudas**")
+    
+    st.divider()
+    
+    # Table rows Work on a -> View button with statistics.
+    for idx, broker in enumerate(st.session_state["brokers"]):
+        col1, col2, col3, col4 = st.columns([1, 1, 1, 2])
+        with col1:
+            st.write(broker.name)
+        with col2:
+            st.write(str(broker.broker_id))
+        with col3:
+            # Count saudas linked to this broker
+            sauda_count = sum(1 for s in st.session_state["saudas"] if s.broker_id == broker.broker_id)
+            st.write(sauda_count)
+        
+        if idx < len(st.session_state["brokers"]) - 1:
+            st.divider()
