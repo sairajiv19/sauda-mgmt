@@ -12,8 +12,6 @@ class SaudaStatus(str, Enum):
     IN_TRANSPORT = "In transport"
     SHIPPED = "Shipped"
     COMPLETED = "Completed"
-    UNKNOWN = "Unknown"
-
 
 class BrokerModel(BaseModel):
     """Broker Collection Model"""
@@ -58,6 +56,26 @@ class FRKBhejaModel(TypedDict):
     frk_date: Optional[datetime.datetime]
 
 
+class ShipmentModel(BaseModel):
+    """Lot/Bora Shipment Model"""
+    id: Optional[ObjectId] = Field(default_factory=ObjectId, alias="_id")
+    lot_id: ObjectId = Field(..., description="Reference to Lot")
+    sent_bora_count: int = Field(..., ge=0, description="Total bora sent")
+    bora_date: Optional[datetime.datetime] = Field(None, description="Shipping date")
+    bora_via: Optional[str] = Field(None, description="Shipping method/vehicle")
+    flap_sticker_date: Optional[datetime.datetime] = Field(None, description="Flap sticker date")
+    flap_sticker_via: Optional[str] = Field(None, description="Sticker batch info")
+    gate_pass_date: Optional[datetime.datetime] = Field(None, description="Gate pass issue date")
+    gate_pass_via: Optional[str] = Field(None, description="Gate pass location")
+    created_at: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(datetime.UTC))
+    updated_at: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(datetime.UTC))
+
+    model_config=ConfigDict(
+        populate_by_name = True,
+        arbitrary_types_allowed = True,
+        json_encoders = {ObjectId: str},)
+
+
 class LotModel(BaseModel):
     """Lot Collection Model"""
     id: Optional[ObjectId] = Field(default_factory=ObjectId, alias="_id")
@@ -67,6 +85,7 @@ class LotModel(BaseModel):
     # FRK and Gate Pass
     frk: bool = Field(default=False, description="FRK status")
     frk_bheja: Optional[FRKBhejaModel] = Field(None, description="FRK shipment details")
+    shipment_details: Optional[List[ShipmentModel]] = Field(default_factory=list)
     total_bora_count: Optional[int] = Field(default=0, ge=0, description="No. of Boras in a Lot.")
     shipped_bora_count: Optional[int] = None
     remaining_bora_count: Optional[int] = None
@@ -96,22 +115,3 @@ class LotModel(BaseModel):
         arbitrary_types_allowed = True,
         json_encoders = {ObjectId: str},)
 
-
-class ShipmentModel(BaseModel):
-    """Lot/Bora Shipment Model"""
-    id: Optional[ObjectId] = Field(default_factory=ObjectId, alias="_id")
-    lot_id: ObjectId = Field(..., description="Reference to Lot")
-    sent_bora_count: int = Field(..., ge=0, description="Total bora sent")
-    bora_date: Optional[datetime.datetime] = Field(None, description="Shipping date")
-    bora_via: Optional[str] = Field(None, description="Shipping method/vehicle")
-    flap_sticker_date: Optional[datetime.datetime] = Field(None, description="Flap sticker date")
-    flap_sticker_via: Optional[str] = Field(None, description="Sticker batch info")
-    gate_pass_date: Optional[datetime.datetime] = Field(None, description="Gate pass issue date")
-    gate_pass_via: Optional[str] = Field(None, description="Gate pass location")
-    created_at: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(datetime.UTC))
-    updated_at: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(datetime.UTC))
-
-    model_config=ConfigDict(
-        populate_by_name = True,
-        arbitrary_types_allowed = True,
-        json_encoders = {ObjectId: str},)

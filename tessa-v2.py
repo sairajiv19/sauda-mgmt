@@ -6,11 +6,12 @@ from bson import ObjectId
 from models import SaudaModel, SaudaStatus, FRKBhejaModel, LotModel, BrokerModel
 
 
+
 # ---------------- Fake Data ----------------
 initial_saudas = [
     SaudaModel(
         name="Rice Sale A1",
-        broker_id="BRK102",  # example ObjectId for BRK001
+        broker_id="BRK102",
         party_name="Sharma Agro",
         purchase_date=datetime(2025, 10, 1, tzinfo=UTC),
         total_lots=3,
@@ -21,7 +22,7 @@ initial_saudas = [
     ),
     SaudaModel(
         name="Rice Deal B5",
-        broker_id="BRK101",  # example ObjectId for BRK002
+        broker_id="BRK101",
         party_name="Gupta Traders",
         purchase_date=datetime(2025, 9, 30, tzinfo=UTC),
         total_lots=2,
@@ -33,11 +34,13 @@ initial_saudas = [
 ]
 
 
+
 initial_brokers = [
     BrokerModel(broker_id="BRK101", name="Rajesh Broker"),
     BrokerModel(broker_id="BRK102", name="Agro Link"),
     BrokerModel(broker_id="BRK103", name="Vivek Traders"),
 ]
+
 
 # Initialize session data
 if "saudas" not in st.session_state:
@@ -60,6 +63,11 @@ if "show_confirmation" not in st.session_state:
     st.session_state["show_confirmation"] = False
 if "pending_changes" not in st.session_state:
     st.session_state["pending_changes"] = {}
+if "batch_edit_mode" not in st.session_state:
+    st.session_state["batch_edit_mode"] = False
+if "selected_lots_for_batch" not in st.session_state:
+    st.session_state["selected_lots_for_batch"] = set()
+
 
 
 # ---------------- Custom CSS ----------------
@@ -184,6 +192,7 @@ st.markdown(
 )
 
 
+
 # ---------------- Helper Functions ----------------
 def get_or_create_lot(sauda_name, lot_number):
     """Get or create lot data for a specific sauda and lot number"""
@@ -198,6 +207,7 @@ def get_or_create_lot(sauda_name, lot_number):
             net_rice_bought=100.0,
         )
     return st.session_state["lot_data"][key]
+
 
 
 def style_dataframe(df):
@@ -248,12 +258,15 @@ def style_dataframe(df):
     )
 
 
+
 # ---------------- Layout ----------------
 st.set_page_config(page_title="Sauda Management System", layout="wide")
+
 
 page = st.sidebar.selectbox("Navigate", ["Sauda Deals", "Brokers"], index=0)
 st.sidebar.markdown("---")
 st.sidebar.caption("Sauda Management System © 2025")
+
 
 
 # ---------------- Sauda Page ----------------
@@ -261,6 +274,7 @@ if page == "Sauda Deals":
     # Check if viewing a specific sauda
     if st.session_state["selected_sauda"] is not None:
         sauda = st.session_state["saudas"][st.session_state["selected_sauda"]]
+
 
         # Custom Navbar
         st.markdown(
@@ -275,13 +289,27 @@ if page == "Sauda Deals":
             unsafe_allow_html=True,
         )
 
-        back_col, _, _ = st.columns([1, 4, 1])
+
+        back_col, _, edit_lots_col = st.columns([1, 4, 1])
         with back_col:
             if st.button("← Back to Saudas", use_container_width=True, type="secondary"):
                 st.session_state["selected_sauda"] = None
                 st.session_state["selected_lot"] = None
                 st.session_state["edit_mode"] = False
+                st.session_state["batch_edit_mode"] = False
+                st.session_state["selected_lots_for_batch"] = set()
                 st.rerun()
+        with edit_lots_col:
+            if not st.session_state.get("batch_edit_mode", False):
+                if st.button("📝 Batch Edit Lots", use_container_width=True, type="primary"):
+                    st.session_state["batch_edit_mode"] = True
+                    st.rerun()
+            else:
+                if st.button("❌ Cancel Batch", use_container_width=True, type="secondary"):
+                    st.session_state["batch_edit_mode"] = False
+                    st.session_state["selected_lots_for_batch"] = set()
+                    st.rerun()
+
 
         # Display sauda details in card
         st.markdown("#### Sauda Information")
@@ -300,11 +328,13 @@ if page == "Sauda Deals":
             st.metric("Agreement", sauda.rice_agreement or "N/A")
         st.markdown("</div>", unsafe_allow_html=True)
 
+
         # Check if a lot is selected
         if st.session_state["selected_lot"] is not None:
             lot_number = st.session_state["selected_lot"]
             lot_key = f"{sauda.name}_lot_{lot_number}"
             lot_data = get_or_create_lot(sauda.name, lot_number)
+
 
             # Back to lots button
             back_col, _, edit_col = st.columns([1, 4, 1])
@@ -331,76 +361,70 @@ if page == "Sauda Deals":
                         st.session_state["show_confirmation"] = False
                         st.rerun()
 
+
             st.markdown(f"<h2 style='text-align: center;'>Lot → {lot_data.rice_lot_no or f'Lot {lot_number}'}</h2>", unsafe_allow_html=True)
-            # st.markdown("<h4 style='text-align: center;'>Lot Information</h4>", unsafe_allow_html=True)
+
 
             # Edit button
             edit_col1, edit_col2 = st.columns([5, 1])
+
 
             if st.session_state["edit_mode"]:
                 # Editable fields without form
                 st.markdown("#### Edit Lot Details")
 
+
                 col1, col2 = st.columns(2)
+
 
                 rice_lot_no = col1.text_input(
                     "Rice Lot No", value=lot_data.rice_lot_no or "", key="edit_rice_lot_no"
                 )
 
+
                 st.markdown("---")
-                st.markdown("**FRK & Gate Pass**")
+                st.markdown("**FRK Details**")
+
 
                 frk = st.checkbox("FRK", value=lot_data.frk, key="edit_frk")
 
+
                 frk_via = ""
                 frk_qty = 0.0
-                frk_bheja_date = None
+                frk_date = None
                 
                 if frk:
                     frk_col1, frk_col2 = st.columns(2)
                     frk_via = frk_col1.text_input(
                         "FRK Via",
-                        value=lot_data.frk_bheja.via if lot_data.frk_bheja else "",
+                        value=lot_data.frk_bheja.get('frk_via', '') if lot_data.frk_bheja else "",
                         key="edit_frk_via"
                     )
                     frk_qty = frk_col2.number_input(
                         "FRK Qty",
                         value=(
-                            float(lot_data.frk_bheja.qty)
+                            float(lot_data.frk_bheja.get('frk_qty', 0))
                             if lot_data.frk_bheja
                             else 0.0
                         ),
                         min_value=0.0,
                         key="edit_frk_qty"
                     )
-                    frk_bheja_date = frk_col1.date_input(
+                    frk_date = frk_col1.date_input(
                         "FRK Date",
                         value=(
-                            lot_data.frk_bheja_date.date()
-                            if lot_data.frk_bheja_date
+                            lot_data.frk_bheja.get('frk_date').date()
+                            if lot_data.frk_bheja and lot_data.frk_bheja.get('frk_date')
                             else None
                         ),
                         key="edit_frk_date",
                         format="DD/MM/YYYY"
                     )
 
-                gate_col1, gate_col2 = st.columns(2)
-                gate_pass_date = gate_col1.date_input(
-                    "Gate Pass Date",
-                    value=(
-                        lot_data.gate_pass_date.date()
-                        if lot_data.gate_pass_date
-                        else None
-                    ),
-                    key="edit_gate_date",
-                    format="DD/MM/YYYY"
-                )
-                gate_pass_via = gate_col2.text_input(
-                    "Gate Pass Via", value=lot_data.gate_pass_via or "", key="edit_gate_via"
-                )
 
                 st.markdown("---")
                 st.markdown("**Purchase Details**")
+
 
                 purchase_col1, purchase_col2 = st.columns(2)
                 rice_pass_date = purchase_col1.date_input(
@@ -432,8 +456,10 @@ if page == "Sauda Deals":
                     key="edit_net_rice"
                 )
 
+
                 st.markdown("---")
                 st.markdown("**Cost Details**")
+
 
                 cost_col1, cost_col2 = st.columns(2)
                 moisture_cut = cost_col1.number_input(
@@ -451,8 +477,8 @@ if page == "Sauda Deals":
                     min_value=0.0,
                     key="edit_dalali"
                 )
-                other_costs = cost_col2.number_input(
-                    "Other Costs", value=float(lot_data.other_costs), min_value=0.0, key="edit_other"
+                other_expenses = cost_col2.number_input(
+                    "Other Costs", value=float(lot_data.other_expenses), min_value=0.0, key="edit_other"
                 )
                 brokerage = cost_col1.number_input(
                     "Brokerage", value=float(lot_data.brokerage), min_value=0.0, key="edit_brokerage"
@@ -466,6 +492,7 @@ if page == "Sauda Deals":
                     key="edit_nett"
                 )
 
+
                 st.markdown("---")
                 
                 if st.button("💾 Save Changes", use_container_width=True, type="primary", key="save_btn"):
@@ -474,19 +501,12 @@ if page == "Sauda Deals":
                         "rice_lot_no": rice_lot_no,
                         "frk": frk,
                         "frk_bheja": (
-                            FRKBhejaModel(via=frk_via, qty=frk_qty) if frk else None
+                            {
+                                "frk_via": frk_via,
+                                "frk_qty": frk_qty,
+                                "frk_date": datetime.combine(frk_date, datetime.min.time()) if frk_date else None
+                            } if frk else None
                         ),
-                        "frk_bheja_date": (
-                            datetime.combine(frk_bheja_date, datetime.min.time())
-                            if frk and frk_bheja_date
-                            else None
-                        ),
-                        "gate_pass_date": (
-                            datetime.combine(gate_pass_date, datetime.min.time())
-                            if gate_pass_date
-                            else None
-                        ),
-                        "gate_pass_via": gate_pass_via,
                         "rice_pass_date": (
                             datetime.combine(rice_pass_date, datetime.min.time())
                             if rice_pass_date
@@ -499,29 +519,28 @@ if page == "Sauda Deals":
                         "moisture_cut": moisture_cut,
                         "qi_expense": qi_expense,
                         "lot_dalali_expense": lot_dalali_expense,
-                        "other_costs": other_costs,
+                        "other_expenses": other_expenses,
                         "brokerage": brokerage,
                         "nett_amount": nett_amount,
                     }
                     st.session_state["show_confirmation"] = True
                     st.rerun()
 
+
             else:
                 # Display mode
-                st.markdown("#### FRK & Gate Pass")
+                st.markdown("#### FRK Details")
                 st.markdown(f"**FRK Status:** {'FRK' if lot_data.frk else 'Non FRK'}")
 
+
                 if lot_data.frk and lot_data.frk_bheja:
-                    st.markdown(f"**FRK Via:** {lot_data.frk_bheja.via}")
-                    st.markdown(f"**FRK Qty:** {lot_data.frk_bheja.qty}")
+                    st.markdown(f"**FRK Via:** {lot_data.frk_bheja.get('frk_via', 'N/A')}")
+                    st.markdown(f"**FRK Qty:** {lot_data.frk_bheja.get('frk_qty', 0)}")
+                    frk_date_obj = lot_data.frk_bheja.get('frk_date')
                     st.markdown(
-                        f"**FRK Bheja Date:** {lot_data.frk_bheja_date.strftime('%d-%m-%Y') if lot_data.frk_bheja_date else 'N/A'}"
+                        f"**FRK Date:** {frk_date_obj.strftime('%d-%m-%Y') if frk_date_obj else 'N/A'}"
                     )
 
-                st.markdown(
-                    f"**Gate Pass Date:** {lot_data.gate_pass_date.strftime('%d-%m-%Y') if lot_data.gate_pass_date else 'N/A'}"
-                )
-                st.markdown(f"**Gate Pass Via:** {lot_data.gate_pass_via or 'N/A'}")
 
                 st.markdown("---")
                 st.markdown("#### Purchase Details")
@@ -535,12 +554,13 @@ if page == "Sauda Deals":
                 st.markdown(f"**Rice Bags Quantity:** {lot_data.rice_bags_quantity}")
                 st.markdown(f"**Net Rice Bought:** {lot_data.net_rice_bought}")
 
+
                 st.markdown("---")
                 st.markdown("#### Cost Details")
                 st.markdown(f"**Moisture Cut:** ₹{lot_data.moisture_cut:,.2f}")
                 st.markdown(f"**QI Expense:** ₹{lot_data.qi_expense:,.2f}")
                 st.markdown(f"**Dalali Expense:** ₹{lot_data.lot_dalali_expense:,.2f}")
-                st.markdown(f"**Other Costs:** ₹{lot_data.other_costs:,.2f}")
+                st.markdown(f"**Other Costs:** ₹{lot_data.other_expenses:,.2f}")
                 st.markdown(f"**Brokerage:** ₹{lot_data.brokerage:,.2f}")
                 st.markdown(
                     f"**Nett Amount:** ₹{lot_data.nett_amount:,.2f}"
@@ -548,10 +568,12 @@ if page == "Sauda Deals":
                     else "**Nett Amount:** N/A"
                 )
 
+
                 st.markdown("---")
                 st.caption(
                     f"Created: {lot_data.created_at.strftime('%d-%m-%Y %H:%M')} | Updated: {lot_data.updated_at.strftime('%d-%m-%Y %H:%M')}"
                 )
+
 
             # Confirmation dialog at bottom
             if st.session_state["show_confirmation"]:
@@ -586,41 +608,84 @@ if page == "Sauda Deals":
                         st.session_state["pending_changes"] = {}
                         st.rerun()
 
+
             st.markdown("</div>", unsafe_allow_html=True)
+
 
         else:
             # Show lot selection
-            st.markdown(f"#### Lot Selection ({sauda.total_lots} lots available)")
-            st.caption("Click on a lot to view details")
+            if st.session_state.get("batch_edit_mode", False):
+                st.markdown(f"#### Select Lots for Batch Edit ({sauda.total_lots} lots available)")
+                st.caption("Check the lots you want to edit together")
+                
+                # Display lot checkboxes in grid
+                cols_per_row = 6
+                for i in range(0, sauda.total_lots, cols_per_row):
+                    cols = st.columns(cols_per_row)
+                    for j in range(cols_per_row):
+                        lot_number = i + j + 1
+                        if lot_number > sauda.total_lots:
+                            break
 
-            # Display lot cards in grid
-            cols_per_row = 6
-            for i in range(0, sauda.total_lots, cols_per_row):
-                cols = st.columns(cols_per_row)
-                for j in range(cols_per_row):
-                    lot_number = i + j + 1
-                    if lot_number > sauda.total_lots:
-                        break
+                        with cols[j]:
+                            lot_key = f"{sauda.name}_lot_{lot_number}"
+                            if lot_key in st.session_state["lot_data"]:
+                                lot_display = (
+                                    st.session_state["lot_data"][lot_key].rice_lot_no
+                                    or f"Lot {lot_number}"
+                                )
+                            else:
+                                lot_display = f"Lot {lot_number}"
 
-                    with cols[j]:
-                        lot_key = f"{sauda.name}_lot_{lot_number}"
-                        # Get lot data if exists to show rice_lot_no
-                        if lot_key in st.session_state["lot_data"]:
-                            lot_display = (
-                                st.session_state["lot_data"][lot_key].rice_lot_no
-                                or f"Lot {lot_number}"
-                            )
-                        else:
-                            lot_display = f"Lot {lot_number}"
+                            is_selected = lot_number in st.session_state["selected_lots_for_batch"]
+                            if st.checkbox(lot_display, value=is_selected, key=f"batch_lot_{lot_number}"):
+                                st.session_state["selected_lots_for_batch"].add(lot_number)
+                            else:
+                                st.session_state["selected_lots_for_batch"].discard(lot_number)
+                
+                st.markdown("---")
+                if len(st.session_state["selected_lots_for_batch"]) >= 2:
+                    st.info(f"Selected {len(st.session_state['selected_lots_for_batch'])} lot(s) for batch edit")
+                    if st.button("✓ Proceed with Selected Lots", use_container_width=True, type="primary"):
+                        st.session_state["batch_edit_mode"] = False
+                        # You can add batch edit logic here
+                        st.success("Batch edit functionality coming soon!")
+                else:
+                    st.warning("Please select at least two lots to continue")
+            
+            else:
+                st.markdown(f"#### Lot Selection ({sauda.total_lots} lots available)")
+                st.caption("Click on a lot to view details")
 
-                        if st.button(
-                            lot_display,
-                            key=f"lot_{lot_number}",
-                            use_container_width=True,
-                            type="primary",
-                        ):
-                            st.session_state["selected_lot"] = lot_number
-                            st.rerun()
+                # Display lot cards in grid
+                cols_per_row = 6
+                for i in range(0, sauda.total_lots, cols_per_row):
+                    cols = st.columns(cols_per_row)
+                    for j in range(cols_per_row):
+                        lot_number = i + j + 1
+                        if lot_number > sauda.total_lots:
+                            break
+
+                        with cols[j]:
+                            lot_key = f"{sauda.name}_lot_{lot_number}"
+                            # Get lot data if exists to show rice_lot_no
+                            if lot_key in st.session_state["lot_data"]:
+                                lot_display = (
+                                    st.session_state["lot_data"][lot_key].rice_lot_no
+                                    or f"Lot {lot_number}"
+                                )
+                            else:
+                                lot_display = f"Lot {lot_number}"
+
+                            if st.button(
+                                lot_display,
+                                key=f"lot_{lot_number}",
+                                use_container_width=True,
+                                type="primary",
+                            ):
+                                st.session_state["selected_lot"] = lot_number
+                                st.rerun()
+
 
     else:
         # Custom Navbar for main list
@@ -636,6 +701,7 @@ if page == "Sauda Deals":
             unsafe_allow_html=True,
         )
 
+
         # Add button row
         _, _, _, _, _, add_col = st.columns([1, 1, 1, 1, 1, 1])
         with add_col:
@@ -650,6 +716,7 @@ if page == "Sauda Deals":
             ):
                 st.session_state["add_sauda"] = not st.session_state["add_sauda"]
                 st.rerun()
+
 
         # Inline Add Section
         if st.session_state["add_sauda"]:
@@ -668,6 +735,7 @@ if page == "Sauda Deals":
                 status = st.selectbox(
                     "Status", ["INITIATE_PHASE", "Pending", "Completed", "Cancelled"]
                 )
+
 
                 submitted = st.form_submit_button(
                     "✓ Submit Deal", use_container_width=True, type="primary"
@@ -695,8 +763,10 @@ if page == "Sauda Deals":
                         st.error(str(e))
             st.markdown("</div>", unsafe_allow_html=True)
 
+
         # Display table with headers
         st.caption("Click 'View' to manage lots for each deal")
+
 
         # Table header
         header_cols = st.columns([2, 1, 1.5, 1, 1, 1, 1, 0.8])
@@ -717,7 +787,9 @@ if page == "Sauda Deals":
         with header_cols[7]:
             st.markdown("**Action**")
 
+
         st.divider()
+
 
         # Table rows
         for idx, sauda in enumerate(st.session_state["saudas"]):
@@ -741,10 +813,13 @@ if page == "Sauda Deals":
                     st.session_state["selected_sauda"] = idx
                     st.rerun()
 
+
             if idx < len(st.session_state["saudas"]) - 1:
                 st.divider()
 
+
         st.markdown("</div>", unsafe_allow_html=True)
+
 
 
 # ---------------- Broker Page ----------------
@@ -762,6 +837,7 @@ if page == "Brokers":
         unsafe_allow_html=True,
     )
 
+
     # Add button row
     _, _, _, _, _, add_col = st.columns([1, 1, 1, 1, 1, 1])
     with add_col:
@@ -773,6 +849,7 @@ if page == "Brokers":
         ):
             st.session_state["add_broker"] = not st.session_state["add_broker"]
             st.rerun()
+
 
     # Add broker form
     if st.session_state["add_broker"]:
@@ -792,7 +869,8 @@ if page == "Brokers":
                 except Exception as e:
                     st.error(f"Error: {str(e)}")
 
-    # Display brokers table - only name, ID, and count
+
+    # Display brokers table
     st.caption("Broker list with sauda counts")
     
     # Table header
@@ -806,7 +884,7 @@ if page == "Brokers":
     
     st.divider()
     
-    # Table rows Work on a -> View button with statistics.
+    # Table rows
     for idx, broker in enumerate(st.session_state["brokers"]):
         col1, col2, col3, col4 = st.columns([1, 1, 1, 2])
         with col1:
