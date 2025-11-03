@@ -14,6 +14,7 @@ from typing import Optional, List
 import datetime
 import uvicorn
 from contextlib import asynccontextmanager
+from fastapi.middleware.cors import CORSMiddleware
 
 
 # Input Models
@@ -142,6 +143,13 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # or specify ["http://localhost:3000"] etc.
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Read Routes - Done
 @app.get("/deals/read/all")
@@ -212,6 +220,13 @@ async def get_lot_details(
     if lot["frk"]:
         if lot["frk_bheja"].get("frk_date"):
             lot["frk_bheja"]["frk_date"] = str(lot["frk_bheja"]["frk_date"])
+    if lot['shipment_details']:
+        for i in lot['shipment_details']:
+            if i.get("bora_date", False): 
+                i["bore_date"] = str(i["bora_date"])
+            if i.get("gate_pass_date", False):
+                i["gate_pass_date"] = str(i["gate_pass_date"])
+            i.pop('date')  # Remove this
     return JSONResponse(content={"response": lot}, status_code=HTTP_200_OK)
 
 
