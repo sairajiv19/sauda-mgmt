@@ -3,7 +3,7 @@ from typing import Optional, List, TypedDict
 import datetime
 from bson import ObjectId
 from enum import Enum
-
+from uuid import uuid4
 
 class SaudaStatus(str, Enum):
     """Sauda status enum"""
@@ -13,12 +13,17 @@ class SaudaStatus(str, Enum):
     SHIPPED = "Shipped"
     COMPLETED = "Completed"
 
+
+def public_id_str():
+    return str(uuid4())
+
 class BrokerModel(BaseModel):
     """Broker Collection Model"""
     id: Optional[ObjectId] = Field(default_factory=ObjectId, alias="_id")
-    broker_id: Optional[str]
+    public_id: str = Field(default_factory=public_id_str, description="Public ID.")
+    broker_id: str = Field(..., description="User given Broker ID")
     name: str = Field(..., description="Broker name")
-    sauda_ids: List[ObjectId] = Field(default_factory=list, description="Linked saudas")
+    sauda_ids: List[str] = Field(default_factory=list, description="Linked saudas")
     created_at: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(datetime.UTC))
     updated_at: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(datetime.UTC))
 
@@ -31,6 +36,7 @@ class BrokerModel(BaseModel):
 class SaudaModel(BaseModel):
     """Sauda (Deal) Collection Model"""
     id: Optional[ObjectId] = Field(default_factory=ObjectId, alias="_id")
+    public_id: str = Field(default_factory=public_id_str, description="Public ID.")
     name: str = Field(..., description="Sauda/deal name")
     broker_id: str = Field(..., description="The id of the broker in the system.")
     party_name: str = Field(..., description="Party or firm name")
@@ -40,6 +46,7 @@ class SaudaModel(BaseModel):
     rice_type: Optional[str] = Field(default=None, description="Type of rice and Agreement")
     rice_agreement: Optional[str] = Field(default=None, description="Agreement number")
     created_at: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(datetime.UTC))
+    updated_at: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(datetime.UTC))
     end_at: Optional[datetime.datetime] = Field(None, description="Final date when sauda is complete.")
     status: str = Field(default=SaudaStatus.INITIATE_PHASE.value, description="Status of the sauda.")
 
@@ -59,7 +66,9 @@ class FRKBhejaModel(TypedDict):
 class ShipmentModel(BaseModel):
     """Lot/Bora Shipment Model"""
     id: Optional[ObjectId] = Field(default_factory=ObjectId, alias="_id")
-    lot_id: ObjectId = Field(..., description="Reference to Lot")
+    public_id: str = Field(default_factory=public_id_str, description="Public ID.")
+    lot_id: str = Field(..., description="Reference to public Lot Id")
+    sauda_id: str = Field(..., description="Reference to public Sauda Id")
     sent_bora_count: int = Field(..., ge=0, description="Total bora sent")
     bora_date: Optional[datetime.datetime] = Field(None, description="Shipping date")
     bora_via: Optional[str] = Field(None, description="Shipping method/vehicle")
@@ -79,7 +88,8 @@ class ShipmentModel(BaseModel):
 class LotModel(BaseModel):
     """Lot Collection Model"""
     id: Optional[ObjectId] = Field(default_factory=ObjectId, alias="_id")
-    sauda_id: ObjectId = Field(..., description="Reference to parent sauda")
+    public_id: str = Field(default_factory=public_id_str, description="Public ID.")
+    sauda_id: str = Field(..., description="Reference to parent public sauda id")
     rice_lot_no: Optional[str] = Field(default=None, description="Rice lot number")
 
     # FRK and Gate Pass
