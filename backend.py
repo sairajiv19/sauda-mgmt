@@ -15,9 +15,12 @@ from contextlib import asynccontextmanager
 
 # Input Models
 class BrokerInput(BaseModel):
-    public_id: str = Field(..., description="Public IDs.")
     name: str = Field(..., description="Broker name")
     broker_id: str = Field(..., description="Broker ID.")
+
+class BrokerUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, description="Broker name")
+    broker_id: Optional[str] = Field(default=None, description="Broker ID.")
 
 class SaudaInput(BaseModel):
     name: str = Field(..., description="Sauda/deal name")
@@ -28,6 +31,17 @@ class SaudaInput(BaseModel):
     rate: float = Field(..., gt=0, description="Rate per bora/product")
     rice_type: Optional[str] = Field(default=None, description="Type of rice and Agreement")
     rice_agreement: Optional[str] = Field(default=None, description="Agreement number")
+
+class SaudaUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, description="Sauda/deal name")
+    broker_id: Optional[str] = Field(default=None, description="The id of the broker in the system.")
+    party_name: Optional[str] = Field(default=None, description="Party or firm name")
+    purchase_date: Optional[datetime.datetime] = Field(default=None, description="Sauda date")
+    total_lots: Optional[int] = Field(default=None, ge=0, description="Total number of lots")
+    rate: Optional[float] = Field(default=None, gt=0, description="Rate per bora/product")
+    rice_type: Optional[str] = Field(default=None, description="Type of rice and Agreement")
+    rice_agreement: Optional[str] = Field(default=None, description="Agreement number")
+    updated_at: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(datetime.UTC))
 
 class ShipmentInput(BaseModel):
     public_id: str = Field(..., description="Public IDs.")
@@ -41,21 +55,20 @@ class ShipmentInput(BaseModel):
     gate_pass_via: Optional[str] = Field(None, description="Gate pass location")
 
 class LotUpdate(BaseModel):
-    public_id: str = Field(..., description="Public IDs.")
     rice_lot_no: Optional[str] = Field(default=None, description="Rice lot number")
-    frk: bool = Field(default=False, description="FRK status")
-    frk_bheja: Optional[FRKBhejaModel] = Field(None, description="FRK shipment details")
-    total_bora_count: Optional[int] = Field(default=0, ge=0, description="No. of Boras in a Lot.")
-    rice_pass_date: Optional[datetime.datetime] = Field(None, description="Rice pass date")
-    rice_deposit_centre: Optional[str] = Field(None, description="Storage/deposit location")
-    qtl: float = Field(default=0, ge=0, description="Quantity in quintals")
-    rice_bags_quantity: int = Field(default=0, ge=0, description="Number of bags")
-    moisture_cut: float = Field(default=0, ge=0, description="Moisture cut amount")
-    net_rice_bought: float = Field(default=0, ge=0, description="Net rice quantity bought")
-    qi_expense: float = Field(default=0, ge=0, description="QI expense")
-    lot_dalali_expense: float = Field(default=0, ge=0, description="Dalali/commission expense")
-    other_expenses: float = Field(default=0, ge=0, description="Other miscellaneous costs")
-    brokerage: float = Field(default=3.00, ge=0, description="Brokerage fees")
+    frk: Optional[bool] = Field(default=False, description="FRK status")
+    frk_bheja: Optional[FRKBhejaModel] = Field(default=None, description="FRK shipment details")
+    total_bora_count: Optional[int] = Field(default=None, ge=0, description="No. of Boras in a Lot.")
+    rice_pass_date: Optional[datetime.datetime] = Field(default=None, description="Rice pass date")
+    rice_deposit_centre: Optional[str] = Field(default=None, description="Storage/deposit location")
+    qtl: Optional[float] = Field(default=None, ge=0, description="Quantity in quintals")
+    rice_bags_quantity: int = Field(default=None, ge=0, description="Number of bags")
+    moisture_cut: Optional[float] = Field(default=None, ge=0, description="Moisture cut amount")
+    net_rice_bought: Optional[float] = Field(default=None, ge=0, description="Net rice quantity bought")
+    qi_expense: Optional[float] = Field(default=None, ge=0, description="QI expense")
+    lot_dalali_expense: Optional[float] = Field(default=None, ge=0, description="Dalali/commission expense")
+    other_expenses: Optional[float] = Field(default=None, ge=0, description="Other miscellaneous costs")
+    brokerage: Optional[float] = Field(default=None, ge=0, description="Brokerage fees")
 
 class BatchLotUpdate(BaseModel):
     public_lot_ids: List[str]
@@ -83,7 +96,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# Read Routes
+# Read Routes - Done
 @app.get("/deals/read/all")
 async def get_all_deals(req: Request) -> JSONResponse:
     deals = await req.app.state.deal_collection.find({}, projection={"_id": False, "end_at": False, "created_at": False, "updated_at": False}).to_list() # This one is right change all of them to this
@@ -91,167 +104,182 @@ async def get_all_deals(req: Request) -> JSONResponse:
         deal['purchase_date'] = str(deal['purchase_date'])
     return JSONResponse(content={"response": deals}, status_code=HTTP_200_OK)
 
+@app.get("/deals/read/{public_lot_id}")
+async def get_single_deal(req: Request, public_lot_id: str) -> JSONResponse:
+    deal = await req.app.state.deal_collection.find_one({"public_id": public_lot_id}, projection={"_id": False, "end_at": False, "created_at": False, "updated_at": False})
+    deal['purchase_date'] = str(deal['purchase_date'])
+    return JSONResponse(content={"response": deal}, status_code=HTTP_200_OK)
+
 @app.get("/brokers/read/all")
 async def get_all_brokers(req: Request) -> JSONResponse:
     brokers =  await req.app.state.broker_collection.find({}, projection={"_id": False, "created_at": False, "updated_at": False}).to_list()
     return JSONResponse({"response": brokers}, status_code=HTTP_200_OK)
 
-@app.get("/deals/read/{deal_id}/lot/all") # For generating boxes
+@app.get("/deals/read/{public_deal_id}/lot/all") # For generating boxes
 async def get_all_deal_lots(req: Request, public_deal_id: str) -> JSONResponse:    
     lots = await req.app.state.lot_collection.find({"sauda_id": public_deal_id}, projection={"_id": False, "public_id": True, "rice_lot_no": True, "is_fully_shipped": True}).to_list() # waht all fields needed
     return JSONResponse(content={"response": lots}, status_code=HTTP_200_OK)
 
-@app.get("/deals/read/{deal_id}/lot/{lot_id}")
+@app.get("/deals/read/{public_deal_id}/lot/{public_lot_id}")
 async def get_lot_details(req: Request, public_deal_id: str, public_lot_id: str) -> JSONResponse:
-    lot = await req.app.state.lot_collection.find_one({"sauda_id": public_deal_id, "public_id": public_lot_id}, projection={"_id": False, "created_at": False, "updated_at": False}).to_list()
+    lot = await req.app.state.lot_collection.find_one({"sauda_id": public_deal_id, "public_id": public_lot_id}, projection={"_id": False, "created_at": False, "updated_at": False})
     if not lot:
         raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Lot not found")
+    if lot['rice_pass_date']:
+        lot['rice_pass_date'] = str(lot['rice_pass_date'])
     if lot["frk"]:
-        lot['frk_bheja']['frk_date'] = str(lot['frk_bheja']['frk_date'])
+        if lot['frk_bheja'].get('frk_date'):
+            lot['frk_bheja']['frk_date'] = str(lot['frk_bheja']['frk_date'])
     return JSONResponse(content={"response": lot}, status_code=HTTP_200_OK)
 
 
-# Create Routes
+# Create Routes - Done
 @app.post("/deals/create/")
-async def create_deal(req: Request, deal: SaudaInput) -> JSONResponse:    
+async def create_deal(req: Request, deal: SaudaInput) -> JSONResponse:
     # broker = await req.app.state.broker_collection.find_one({"broker_id": deal.broker_id})
     # if not broker:
     #     raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=f"Broker with id {deal.broker_id} not found")
 
-    new_sauda = SaudaModel(deal.model_dump())
-    inserted_deal = await req.app.state.deal_collection.insert_one(new_sauda.model_dump(by_alias=True))
-    
+    new_sauda = SaudaModel(**deal.model_dump())
+    try:
+        inserted_deal = await req.app.state.deal_collection.insert_one(new_sauda.model_dump(by_alias=True))
+    except Exception:
+        return JSONResponse(content={"message": "Failed creating new deal.",}, status_code=HTTP_500_INTERNAL_SERVER_ERROR)
     # Create empty lots
     lots_to_create = []
-    for _ in range(deal.total_lots):
-        new_lot = LotModel(sauda_id=inserted_deal.inserted_id)
+    for i in range(deal.total_lots):
+        new_lot = LotModel(sauda_id=new_sauda.public_id)
+        new_lot.rice_lot_no = f"Lot {i+1}"
         lots_to_create.append(new_lot.model_dump(by_alias=True))
     
-    if lots_to_create:
-        req.app.database["lot"].insert_many(lots_to_create)
+    try:
+        await req.app.state.lot_collection.insert_many(lots_to_create)
+    except Exception:
+        return JSONResponse(content={"message": "Failed creating new lots.",}, status_code=HTTP_500_INTERNAL_SERVER_ERROR)
 
     # Update broker's sauda_ids
-    req.app.database["broker"].update_one(
-        {"_id": broker["_id"]},
-        {"$push": {"sauda_ids": inserted_deal.inserted_id}}
+    await req.app.state.broker_collection.update_one(
+        {"broker_id": deal.broker_id}, 
+        {"$push": {"sauda_ids": new_sauda.public_id}}
     )
 
     return JSONResponse(
-        content={"message": "Deal created successfully!", "deal_id": str(inserted_deal.inserted_id)},
+        content={"message": "Deal created successfully!", "public_deal_id": str(new_sauda.public_id)},
         status_code=HTTP_201_CREATED
     )
 
 @app.post("/brokers/create/")
 async def create_broker(req: Request, broker: BrokerInput) -> JSONResponse:
-    broker_data = broker.model_dump()
-    
-    if req.app.database["broker"].find_one({"broker_id": broker.broker_id}):
+    if await req.app.state.broker_collection.find_one({"broker_id": broker.broker_id}):
         raise HTTPException(status_code=400, detail="Broker with this ID already exists")
 
-    new_broker = BrokerModel(**broker_data)
-    inserted = req.app.database["broker"].insert_one(new_broker.model_dump(by_alias=True))
-    
+    new_broker = BrokerModel(**broker.model_dump())
+    inserted = await req.app.state.broker_collection.insert_one(new_broker.model_dump(by_alias=True))
+     
     return JSONResponse(
-        content={"message": "Broker created successfully!", "broker_db_id": str(inserted.inserted_id)},
+        content={"message": "Broker created successfully!", "broker_id": broker.broker_id},
         status_code=HTTP_201_CREATED
     )
 
 
-# Update Routes
-@app.post("/deals/update/{deal_id}")
-async def update_deal(req: Request, deal_id: str, deal_update: SaudaInput) -> JSONResponse:
-    try:
-        deal_object_id = ObjectId(deal_id)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid deal_id format")
-
+# Update Routes - Done
+@app.post("/deals/update/{public_deal_id}")
+async def update_deal(req: Request, public_deal_id: str, deal_update: SaudaUpdate) -> JSONResponse:
+    db_data =  await req.app.state.deal_collection.find_one({"public_id": public_deal_id}, projection={"_id": True, "public_id": True})
+    if db_data is None:
+        raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Deal does not exist.")
     update_data = {k: v for k, v in deal_update.model_dump().items() if v is not None}
-    
-    result = req.app.database["deal"].update_one(
-        {"_id": deal_object_id},
-        {"$set": update_data}
-    )
-
-    if result.matched_count == 0:
-        raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Deal not found")
-
+    try:
+        await req.app.state.deal_collection.update_one(
+                {"_id": db_data['_id']},
+                {"$set": update_data},
+                upsert=False
+            )
+    except Exception:
+        raise HTTPException(HTTP_500_INTERNAL_SERVER_ERROR, "Cannot update the deal, mongodb error.")
     return JSONResponse(content={"message": "Deal updated successfully!"}, status_code=HTTP_200_OK)
 
 @app.post("/brokers/update/{broker_id}")
-async def update_broker(req: Request, broker_id: str, broker_update: BrokerInput) -> JSONResponse:
+async def update_broker(req: Request, broker_id: str, broker_update: BrokerUpdate) -> JSONResponse:
+    db_data =  await req.app.state.broker_collection.find_one({"broker_id": broker_id}, projection={"_id": True, "broker_id": True})
+    if db_data is None:
+        raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Broker does not exist.")
     update_data = {k: v for k, v in broker_update.model_dump().items() if v is not None}
+    try:
+        await req.app.state.broker_collection.update_one(
+            {"_id": db_data['_id']},
+            {"$set": update_data},
+            upsert=False
 
-    result = req.app.database["broker"].update_one(
-        {"broker_id": broker_id},
-        {"$set": update_data}
-    )
-
-    if result.matched_count == 0:
-        raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Broker not found")
+        )
+    except Exception:
+        raise HTTPException(HTTP_500_INTERNAL_SERVER_ERROR, "Cannot update the broker, mongodb error.")
 
     return JSONResponse(content={"message": "Broker updated successfully!"}, status_code=HTTP_200_OK)
 
-@app.patch("/deals/update/{deal_id}/lots/{lot_id}/update")
-async def update_single_lot(req: Request, lot_id: str, lot_update: LotUpdate) -> JSONResponse:
-    try:
-        lot_object_id = ObjectId(lot_id)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid lot_id format")
-
+@app.patch("/deals/update/{public_deal_id}/lots/{public_lot_id}/update")
+async def update_single_lot(req: Request, public_deal_id: str, public_lot_id: str, lot_update: LotUpdate) -> JSONResponse:
+    lot = await req.app.state.lot_collection.find_one({"sauda_id": public_deal_id, "public_id": public_lot_id}, projection={"_id": True})
+    if not lot:
+        raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Lot not found")
     update_data = {k: v for k, v in lot_update.model_dump().items() if v is not None}
     update_data["updated_at"] = datetime.datetime.now(datetime.UTC)
 
-    result = req.app.database["lot"].update_one(
-        {"_id": lot_object_id},
-        {"$set": update_data}
-    )
-
-    if result.matched_count == 0:
-        raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Lot not found")
-
+    try:
+        await req.app.state.lot_collection.update_one(
+            {"_id": lot["_id"]},
+            {"$set": update_data}
+        )
+    except Exception:
+        raise HTTPException(HTTP_500_INTERNAL_SERVER_ERROR, "Cannot update the deal, mongodb error.")
     return JSONResponse(content={"message": "Lot updated successfully!"}, status_code=HTTP_200_OK)
 
-@app.patch("/deals/update/lots/batch-update")
-async def update_batch_lot(req: Request, batch_update: BatchLotUpdate) -> JSONResponse:
-    lot_ids_object = [ObjectId(id) for id in batch_update.lot_ids]
+@app.patch("/deals/update/{public_deal_id}/lots/batch-update")
+async def update_batch_lot(req: Request, public_deal_id: str, batch_update: BatchLotUpdate) -> JSONResponse:
+    cursor = req.app.state.lot_collection.find({"sauda_id": public_deal_id, "public_id": {"$in": batch_update.public_lot_ids}}, projection={"_id": True})
+    lots = []
+    async for lot in cursor:
+        lots.append(lot)
+    if len(lots) != len(batch_update.public_lot_ids):
+        raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Some lots are missing / don\'t exist. FATAL ERROR")
     update_data = {k: v for k, v in batch_update.update_data.model_dump().items() if v is not None}
     update_data["updated_at"] = datetime.datetime.now(datetime.UTC)
 
-    result = req.app.database["lot"].update_many(
-        {"_id": {"$in": lot_ids_object}},
-        {"$set": update_data}
-    )
+    try:
 
+        result = await req.app.state.lot_collection.update_many(
+            {"_id": {"$in": [lot['_id'] for lot in lots]}},
+            {"$set": update_data},
+            upsert=False
+        )
+    except Exception:
+        raise HTTPException(HTTP_500_INTERNAL_SERVER_ERROR, "Cannot update the deals, mongodb error.")
+    
     return JSONResponse(
-        content={"message": f"Batch update successful. Matched: {result.matched_count}, Modified: {result.modified_count}"},
+        content={"message": f"Batch lot update successful. Modified Lots Count: {result.modified_count}"},
         status_code=HTTP_200_OK
     )
 
 
-# Delete Routes
-@app.delete("/deals/{deal_id}")
-async def delete_deal(req: Request, deal_id: str) -> JSONResponse:
-    try:
-        deal_object_id = ObjectId(deal_id)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid deal_id format")
-
+# Delete Routes - Done
+@app.delete("/deals/delete/{public_deal_id}")
+async def delete_deal(req: Request, public_deal_id: str) -> JSONResponse:
     # Find the deal to get broker_id
-    deal = req.app.database["deal"].find_one({"_id": deal_object_id})
+    deal = await req.app.state.deal_collection.find_one({"public_id": public_deal_id}, projection={"_id": True, 'broker_id': True})
     if not deal:
         raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Deal not found")
 
     # Delete lots associated with the deal
-    req.app.database["lot"].delete_many({"sauda_id": deal_object_id})
+    await req.app.state.lot_collection.delete_many({"sauda_id": public_deal_id})
 
     # Remove deal_id from broker's sauda_ids
-    req.app.database["broker"].update_one(
+    await req.app.state.broker_collection.update_one(
         {"broker_id": deal["broker_id"]},
-        {"$pull": {"sauda_ids": deal_object_id}}
+        {"$pull": {"sauda_ids": public_deal_id}}
     )
 
     # Delete the deal itself
-    req.app.database["deal"].delete_one({"_id": deal_object_id})
+    await req.app.state.deal_collection.delete_one({"_id": deal['_id']})
 
     return JSONResponse(content={"message": "Deal and associated lots deleted successfully!"}, status_code=HTTP_200_OK)
 

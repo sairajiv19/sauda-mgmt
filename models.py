@@ -20,7 +20,6 @@ def public_id_str():
 class BrokerModel(BaseModel):
     """Broker Collection Model"""
     id: Optional[ObjectId] = Field(default_factory=ObjectId, alias="_id")
-    public_id: str = Field(default_factory=public_id_str, description="Public ID.")
     broker_id: str = Field(..., description="User given Broker ID")
     name: str = Field(..., description="Broker name")
     sauda_ids: List[str] = Field(default_factory=list, description="Linked saudas")
