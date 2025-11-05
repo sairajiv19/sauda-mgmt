@@ -19,12 +19,12 @@ def public_id_str():
 
 class BrokerModel(BaseModel):
     """Broker Collection Model"""
-    id: Optional[ObjectId] = Field(default_factory=ObjectId, alias="_id")
+    id: Optional[ObjectId] = Field(default_factory=ObjectId, alias="_id") # Omitted
     broker_id: str = Field(..., description="User given Broker ID")
     name: str = Field(..., description="Broker name")
     sauda_ids: List[str] = Field(default_factory=list, description="Linked saudas")
-    created_at: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(datetime.UTC))
-    updated_at: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(datetime.UTC))
+    created_at: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(datetime.UTC)) # Omitted
+    updated_at: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(datetime.UTC)) # Omitted
 
     model_config=ConfigDict(
         populate_by_name = True,
@@ -34,7 +34,7 @@ class BrokerModel(BaseModel):
 
 class SaudaModel(BaseModel):
     """Sauda (Deal) Collection Model"""
-    id: Optional[ObjectId] = Field(default_factory=ObjectId, alias="_id")
+    id: Optional[ObjectId] = Field(default_factory=ObjectId, alias="_id") #Omitted
     public_id: str = Field(default_factory=public_id_str, description="Public ID.")
     name: str = Field(..., description="Sauda/deal name")
     broker_id: str = Field(..., description="The id of the broker in the system.")
@@ -44,9 +44,9 @@ class SaudaModel(BaseModel):
     rate: float = Field(..., gt=0, description="Rate per bora/product")
     rice_type: Optional[str] = Field(default=None, description="Type of rice and Agreement")
     rice_agreement: Optional[str] = Field(default=None, description="Agreement number")
-    created_at: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(datetime.UTC))
-    updated_at: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(datetime.UTC))
-    end_at: Optional[datetime.datetime] = Field(None, description="Final date when sauda is complete.")
+    created_at: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(datetime.UTC))#Omitted
+    updated_at: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(datetime.UTC))#Omitted
+    end_at: Optional[datetime.datetime] = Field(None, description="Final date when sauda is complete.") #Omitted
     status: str = Field(default=SaudaStatus.INITIATE_PHASE.value, description="Status of the sauda.")
 
     model_config=ConfigDict(

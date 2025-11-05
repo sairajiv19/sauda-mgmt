@@ -119,6 +119,9 @@ class BatchLotUpdate(BaseModel):
     update_data: LotUpdate
 
 
+class StatusUpdate(BaseModel):
+    status: str
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
@@ -418,6 +421,16 @@ async def update_batch_lot(
         },
         status_code=HTTP_200_OK,
     )
+
+
+@app.patch("/deals/update/{public_id}/status")
+async def update_deal_status(req: Request, public_id: str, request: StatusUpdate)-> JSONResponse:
+    """Update sauda status"""
+    await req.app.state.deal_collection.update_one(
+        {"public_id": public_id},
+        {"$set": {"status": request.status, "updated_at": datetime.datetime.now(datetime.UTC)}}
+    )
+    return JSONResponse(content={"public_id": public_id, "status": request.status}, status_code=HTTP_200_OK)
 
 
 # Delete Routes - Done
