@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.requests import Request
 from fastapi.responses import JSONResponse
 from pymongo.asynchronous.mongo_client import AsyncMongoClient
-from models import SaudaModel, SaudaStatus, FRKBhejaModel, LotModel, BrokerModel
+from models import SaudaModel, SaudaStatus, FRKBhejaModel, LotModel, BrokerModel, ShipmentModel
 from starlette.status import (
     HTTP_200_OK,
     HTTP_201_CREATED,
@@ -15,6 +15,7 @@ import datetime
 import uvicorn
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
+import asyncio
 
 
 # Input Models
@@ -165,7 +166,7 @@ async def get_all_deals(req: Request) -> JSONResponse:
             "created_at": False,
             "updated_at": False,
         },
-    ).to_list()  # This one is right change all of them to this
+    ).to_list()
     for deal in deals:
         deal["purchase_date"] = str(deal["purchase_date"])
     return JSONResponse(content={"response": deals}, status_code=HTTP_200_OK)
@@ -204,7 +205,7 @@ async def get_all_deal_lots(req: Request, public_deal_id: str) -> JSONResponse:
             "rice_lot_no": True,
             "is_fully_shipped": True,
         },
-    ).to_list()  # waht all fields needed
+    ).to_list()
     return JSONResponse(content={"response": lots}, status_code=HTTP_200_OK)
 
 
@@ -434,8 +435,8 @@ async def update_deal_status(req: Request, public_id: str, request: StatusUpdate
     return JSONResponse(content={"public_id": public_id, "status": request.status}, status_code=HTTP_200_OK)
 
 
-# Delete Routes - Done
-@app.delete("/deals/delete/{public_deal_id}")
+# Delete Routes
+@app.delete("/deals/delete/{public_deal_id}") # Add shipment details to be deleted
 async def delete_deal(req: Request, public_deal_id: str) -> JSONResponse:
     # Find the deal to get broker_id
     deal = await req.app.state.deal_collection.find_one(
@@ -452,6 +453,9 @@ async def delete_deal(req: Request, public_deal_id: str) -> JSONResponse:
         {"broker_id": deal["broker_id"]}, {"$pull": {"sauda_ids": public_deal_id}}
     )
 
+    # Delete related shipments
+    await req.app.state.shipment_collection.delete_many({"sauda_id": public_deal_id})
+
     # Delete the deal itself
     await req.app.state.deal_collection.delete_one({"_id": deal["_id"]})
 
@@ -463,3 +467,177 @@ async def delete_deal(req: Request, public_deal_id: str) -> JSONResponse:
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+
+
+
+# Shipment Crud 
+
+
+class ShipmentInput(BaseModel):
+    """Input model for creating a shipment"""
+    sent_bora_count: int = Field(..., ge=0, description="Total bora sent")
+    bora_date: Optional[datetime.datetime] = Field(None, description="Shipping date")
+    bora_via: Optional[str] = Field(None, description="Shipping method/vehicle")
+    flap_sticker_date: Optional[datetime.datetime] = Field(None, description="Flap sticker date")
+    flap_sticker_via: Optional[str] = Field(None, description="Sticker batch info")
+    gate_pass_date: Optional[datetime.datetime] = Field(None, description="Gate pass issue date")
+    gate_pass_via: Optional[str] = Field(None, description="Gate pass location")
+
+
+class ShipmentUpdate(BaseModel):
+    """Update model for updating a shipment"""
+    sent_bora_count: Optional[int] = Field(None, ge=0, description="Total bora sent")
+    bora_date: Optional[datetime.datetime] = Field(None, description="Shipping date")
+    bora_via: Optional[str] = Field(None, description="Shipping method/vehicle")
+    flap_sticker_date: Optional[datetime.datetime] = Field(None, description="Flap sticker date")
+    flap_sticker_via: Optional[str] = Field(None, description="Sticker batch info")
+    gate_pass_date: Optional[datetime.datetime] = Field(None, description="Gate pass issue date")
+    gate_pass_via: Optional[str] = Field(None, description="Gate pass location")
+
+
+class BatchShipmentInput(BaseModel):
+    public_ids: List[str]
+    data: ShipmentInput
+
+
+class BatchShipmentUpdate(BaseModel):
+    public_ids: List[str]
+    update: ShipmentUpdate
+
+
+
+# Create - Done
+@app.post("/deals/{public_deal_id}/lots/{public_lot_id}/shipment/create")
+async def create_shipment(req: Request, public_deal_id: str, public_lot_id: str, shipment_data: ShipmentInput) -> JSONResponse:
+
+    data = ShipmentModel(sauda_id=public_deal_id, lot_id=public_lot_id, **shipment_data.model_dump())
+    try:
+        await req.app.state.shipment_collection.insert_one(data.model_dump())
+        up_res = await req.app.state.lot_collection.update_one(
+            {"public_id" : public_lot_id},
+            {"$push" : {"shipment_details": data.public_id},
+            "$set": {"remaining_bora_count": {"$subtract": ["$remaining_bora_count", data.sent_bora_count]}}
+            }
+        )
+        await req.app.state.deal_collection.update_one(
+        {"public_id": public_deal_id},
+        {"$set": {"status": SaudaStatus.IN_TRANSPORT.value, "updated_at": datetime.datetime.now(datetime.UTC)}}
+        )
+        return JSONResponse(content={"message": "Shipment created successfully and lot updated."})
+    except Exception as e:
+        raise e
+
+@app.post("/deals/{public_deal_id}/lots/shipment/create-batch")
+async def create_shipment_batch(req: Request, public_deal_id: str, batch_insert: BatchShipmentInput) -> JSONResponse:
+    n, public_ids, data = len(batch_insert.public_ids), batch_insert.public_ids, batch_insert.data.model_dump()
+    data_objs = []
+    for i in range(n):
+        data_objs.append(ShipmentModel(sauda_id=public_deal_id, lot_id=public_ids[i], **data).model_dump())
+    tasks = []
+    for shipment in data_objs:
+        tasks.append(req.app.state.lot_collection.update_one(
+            {"public_id" : {"$in": shipment['lot_id']}},
+            {"$push" : {"shipment_details": shipment['public_id']},
+            "$set": {"remaining_bora_count": {"$subtract": ["$remaining_bora_count", data["sent_bora_count"]]}}
+            }
+        ))
+    try:
+        await req.app.state.shipment_collection.insert_many(data_objs)
+        result = await asyncio.gather(*tasks)
+        await req.app.state.deal_collection.update_one(
+        {"public_id": public_deal_id},
+        {"$set": {"status": SaudaStatus.IN_TRANSPORT.value, "updated_at": datetime.datetime.now(datetime.UTC)}}
+        )
+        return JSONResponse(content={"message": "Shipment created successfully and lot updated."})
+    except Exception as e:
+        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail="Error batch updating shipment.")
+    
+# Read - Done
+@app.post("/deals/{public_deal_id}/lots/{public_lot_id}/shipment/{public_shipment_id}/read") # Exact Shipment
+async def read_sinlge_shipment(req: Request, public_deal_id: str, public_lot_id: str, public_shipment_id: str) -> JSONResponse:
+    try:
+        result = await req.app.state.shipment_collection.find_one({"public_id": public_shipment_id},
+                                                                  projection = {"_id": False, "created_at": False, "updated_at": False})
+        if result['bora_date']:
+            result['bora_data'] = str(result['bora_data'])
+        if result['flap_sticker_date']:
+            result['flap_sticker_date'] = str(result['flap_sticker_date'])
+        if result['gate_pass_date']:
+            result['gate_pass_date'] = str(result['gate_pass_date'])
+        return JSONResponse(content={"response": result},
+                            status_code=HTTP_200_OK)
+    except Exception:
+        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail="Error reading a single shipment detail.")
+    
+@app.post("/deals/{public_deal_id}/lots/{public_lot_id}/shipment/read-lot")
+async def read_all_lot_shipments(req: Request, public_deal_id: str, public_lot_id: str) -> JSONResponse: # Read all the shipments for a `LOT`
+    try:
+        results = req.app.state.shipment_collection.find({"sauda_id": public_deal_id, "lot_id": public_lot_id},
+                                                                  projection = {"_id": False, "created_at": False, "updated_at": False})
+        final_result = []
+        async for result in results:
+            if result['bora_date']:
+                result['bora_data'] = str(result['bora_data'])
+            if result['flap_sticker_date']:
+                result['flap_sticker_date'] = str(result['flap_sticker_date'])
+            if result['gate_pass_date']:
+                result['gate_pass_date'] = str(result['gate_pass_date'])
+            final_result.append(result)
+        return JSONResponse(content={"response": final_result},
+                            status_code=HTTP_200_OK)
+    except Exception:
+        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail="Error reading a single shipment detail.")
+
+
+@app.get("/deals/{public_deal_id}/lots/shipment/read-deal") # Read all shipments for a `SAUDA`
+async def read_all_deal_shipments(req: Request, public_deal_id: str) -> JSONResponse: # Read all the shipments for a `LOT`
+    try:
+        results = await req.app.state.shipment_collection.find({"sauda_id": public_deal_id},
+                                                                  projection = {"_id": False, "public_id": True, "lot_id": True, 'sauda_id': True}).to_list()
+        return JSONResponse(content={"response": results},
+                            status_code=HTTP_200_OK)
+    except Exception:
+        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail="Error reading a all shipment detail.")
+    
+# Update - Done
+@app.patch("/deals/lots/shipment/{public_shipment_id}/update") # Single Shipment details update.
+async def update_single_shipment(req: Request, public_shipment_id: str, data: ShipmentUpdate) -> JSONResponse:
+    update_data = {k: v for k, v in data.model_dump().items() if v is not None}
+    try:
+        res = await req.app.state.shipment_collection.update_one({"public_id": public_shipment_id},
+                                                           {"$set": update_data})
+        if res["matched_count"] != 1:
+            raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail="Error updating the lot details with shipment data.")
+        return JSONResponse(content={"message": "Shipment Data updated successfully."}, status_code=HTTP_200_OK)
+    except Exception as e:
+        raise e
+
+
+@app.patch("/deals/lots/shipment/update/batch-update") # Per Lot Shipment Updates
+async def update_multiple_shipments(req: Request, data: BatchShipmentUpdate)->JSONResponse:
+    update_data = {k: v for k, v in data.model_dump().items() if v is not None}
+    update_data['updated_at'] = datetime.datetime.now(datetime.UTC)
+    try:
+        result = await req.app.state.shipment_collection.update_many(
+            {"public_id": {"$in": data.public_ids}},
+            {"$set": update_data},
+            upsert=False,
+        )
+        if result['modified_count'] != len(data.public_ids):
+            raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail="Error updating multiple shipment data.")
+        return JSONResponse(content={"message": "Shipment created successfully and lot updated."})
+    except Exception as e:
+        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail="Error batch updating shipment.")
+
+
+# Delete - Done
+@app.delete("/deals/{public_deal_id}/lots/{public_lot_id}/shipment/{public_shipment_id}/delete")
+async def delete_shipment(req: Request, public_deal_id: str, public_lot_id: str, public_shipment_id: str) -> JSONResponse:
+    try:
+        await req.app.state.shipment_collection.delete_one({"public_id": public_shipment_id, "lot_id": public_lot_id, "sauda_id": public_deal_id})
+        await req.app.state.lot_collection.update_one({"public_id": public_lot_id}, {"$pull": {"shipment_details": public_lot_id}})
+        return JSONResponse(content={"message": "Shipment details deleted successfully."}, status_code=HTTP_200_OK)
+    except Exception:
+        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail="Unable to delete shipment details.")

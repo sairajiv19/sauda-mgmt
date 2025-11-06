@@ -94,7 +94,7 @@ class LotModel(BaseModel):
     # FRK and Gate Pass
     frk: bool = Field(default=False, description="FRK status")
     frk_bheja: Optional[FRKBhejaModel] = Field(None, description="FRK shipment details")
-    shipment_details: Optional[List[ShipmentModel]] = Field(default_factory=list)
+    shipment_details: Optional[List[str]] = Field(default_factory=list, description="The public ids of the shippment details.")
     total_bora_count: Optional[int] = Field(default=0, ge=0, description="No. of Boras in a Lot.")
     shipped_bora_count: Optional[int] = None
     remaining_bora_count: Optional[int] = None
