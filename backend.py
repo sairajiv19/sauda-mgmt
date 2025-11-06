@@ -221,8 +221,9 @@ async def get_lot_details(
     if lot["rice_pass_date"]:
         lot["rice_pass_date"] = str(lot["rice_pass_date"])
     if lot["frk"]:
-        if lot["frk_bheja"].get("frk_date"):
-            lot["frk_bheja"]["frk_date"] = str(lot["frk_bheja"]["frk_date"])
+        if lot["frk_bheja"]:
+                if lot["frk_bheja"]["frk_date"]:
+                    lot["frk_bheja"]["frk_date"] = str(lot["frk_bheja"]["frk_date"])
     if lot['shipment_details']:
         for i in lot['shipment_details']:
             if i.get("bora_date", False): 
