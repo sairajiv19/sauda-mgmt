@@ -212,10 +212,10 @@ async def get_all_deal_lots(req: Request, public_deal_id: str) -> JSONResponse:
 @app.get("/deals/read/{public_deal_id}/lot/{public_lot_id}")
 async def get_lot_details(
     req: Request, public_deal_id: str, public_lot_id: str
-) -> JSONResponse:
+) -> JSONResponse: # Bug fix - shipment details error
     lot = await req.app.state.lot_collection.find_one(
         {"sauda_id": public_deal_id, "public_id": public_lot_id},
-        projection={"_id": False, "created_at": False, "updated_at": False},
+        projection={"_id": False, "created_at": False, "updated_at": False}, 
     )
     if not lot:
         raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Lot not found")
@@ -225,13 +225,6 @@ async def get_lot_details(
         if lot["frk_bheja"]:
                 if lot["frk_bheja"]["frk_date"]:
                     lot["frk_bheja"]["frk_date"] = str(lot["frk_bheja"]["frk_date"])
-    if lot['shipment_details']:
-        for i in lot['shipment_details']:
-            if i.get("bora_date", False): 
-                i["bore_date"] = str(i["bora_date"])
-            if i.get("gate_pass_date", False):
-                i["gate_pass_date"] = str(i["gate_pass_date"])
-            i.pop('date')  # Remove this
     return JSONResponse(content={"response": lot}, status_code=HTTP_200_OK)
 
 
