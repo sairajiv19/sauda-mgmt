@@ -120,8 +120,22 @@ class BatchLotUpdate(BaseModel):
     update_data: LotUpdate
 
 
+class DeliveryUpdate(BaseModel):
+    rice_lot_no: str
+    rice_pass_date: Optional[datetime.datetime] = Field(None, description="Rice pass date")
+    rice_deposit_centre: Optional[str] = Field(None, description="Storage/deposit location")
+    qtl: float = Field(default=0, ge=0, description="Quantity in quintals")
+    rice_bags_quantity: int = Field(default=0, ge=0, description="Number of bags")
+    moisture_cut: float = Field(default=0, ge=0, description="Moisture cut amount")
+
+
+class BatchDeliveryUpdate(BaseModel):
+    data: List[DeliveryUpdate]
+
+
 class StatusUpdate(BaseModel):
     status: str
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -204,6 +218,14 @@ async def get_all_deal_lots(req: Request, public_deal_id: str) -> JSONResponse:
             "public_id": True,
             "rice_lot_no": True,
             "is_fully_shipped": True,
+            "remaining_bora_count": True,
+            "total_bora_count": True,
+            "qi_expense": True,
+            "lot_dalali_expense": True,
+            "other_expenses": True,
+            "brokerage": True,
+            "nett_amount": True,
+            "net_rice_bought": True
         },
     ).to_list()
     return JSONResponse(content={"response": lots}, status_code=HTTP_200_OK)
@@ -362,6 +384,8 @@ async def update_single_lot(
     if not lot:
         raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Lot not found")
     update_data = {k: v for k, v in lot_update.model_dump().items() if v is not None}
+    if update_data['total_bora_count']: # Revisit this logic.
+        update_data["remaining_bora_count"] = update_data["total_bora_count"]
     update_data["updated_at"] = datetime.datetime.now(datetime.UTC)
 
     try:
@@ -383,7 +407,7 @@ async def update_batch_lot(
 ) -> JSONResponse:
     cursor = req.app.state.lot_collection.find(
         {"sauda_id": public_deal_id, "public_id": {"$in": batch_update.public_lot_ids}},
-        projection={"_id": True},
+        projection={"_id": True, "public_id": True},
     )
     lots = []
     async for lot in cursor:
@@ -396,6 +420,9 @@ async def update_batch_lot(
     update_data = {
         k: v for k, v in batch_update.update_data.model_dump().items() if v is not None
     }
+    if update_data.get("total_bora_count", False):
+        update_data["remaining_bora_count"] = update_data["total_bora_count"]
+        await req.app.state.shipment_collection.delete_many({"lot_id": {"$in": [lot["public_id"] for lot in lots]}}) # Deleting shipments that were created with old total count to maintain data integrity.
     update_data["updated_at"] = datetime.datetime.now(datetime.UTC)
 
     try:
@@ -429,7 +456,7 @@ async def update_deal_status(req: Request, public_id: str, request: StatusUpdate
 
 
 # Delete Routes
-@app.delete("/deals/delete/{public_deal_id}") # Add shipment details to be deleted
+@app.delete("/deals/delete/{public_deal_id}")
 async def delete_deal(req: Request, public_deal_id: str) -> JSONResponse:
     # Find the deal to get broker_id
     deal = await req.app.state.deal_collection.find_one(
@@ -458,15 +485,7 @@ async def delete_deal(req: Request, public_deal_id: str) -> JSONResponse:
     )
 
 
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
-
-
-
-
-
 # Shipment Crud 
-
 
 class ShipmentInput(BaseModel):
     """Input model for creating a shipment"""
@@ -507,12 +526,21 @@ async def create_shipment(req: Request, public_deal_id: str, public_lot_id: str,
 
     data = ShipmentModel(sauda_id=public_deal_id, lot_id=public_lot_id, **shipment_data.model_dump())
     try:
-        await req.app.state.shipment_collection.insert_one(data.model_dump())
+        await req.app.state.shipment_collection.insert_one(data.model_dump(by_alias=True))
         up_res = await req.app.state.lot_collection.update_one(
-            {"public_id" : public_lot_id},
-            {"$push" : {"shipment_details": data.public_id},
-            "$set": {"remaining_bora_count": {"$subtract": ["$remaining_bora_count", data.sent_bora_count]}}
-            }
+            {"public_id": public_lot_id},
+            [
+                {
+                    "$set": {
+                        "remaining_bora_count": {
+                            "$subtract": ["$remaining_bora_count", data.sent_bora_count]
+                        },
+                        "shipment_details": {
+                            "$concatArrays": ["$shipment_details", [data.public_id]]
+                        }
+                    }
+                }
+            ]
         )
         await req.app.state.deal_collection.update_one(
         {"public_id": public_deal_id},
@@ -524,21 +552,31 @@ async def create_shipment(req: Request, public_deal_id: str, public_lot_id: str,
 
 @app.post("/deals/{public_deal_id}/lots/shipment/create-batch")
 async def create_shipment_batch(req: Request, public_deal_id: str, batch_insert: BatchShipmentInput) -> JSONResponse:
-    n, public_ids, data = len(batch_insert.public_ids), batch_insert.public_ids, batch_insert.data.model_dump()
+    n, public_ids, data = len(batch_insert.public_ids), batch_insert.public_ids, batch_insert.data.model_dump(by_alias=True)
     data_objs = []
     for i in range(n):
-        data_objs.append(ShipmentModel(sauda_id=public_deal_id, lot_id=public_ids[i], **data).model_dump())
+        data_objs.append(ShipmentModel(sauda_id=public_deal_id, lot_id=public_ids[i], **data).model_dump(by_alias=True))
     tasks = []
     for shipment in data_objs:
         tasks.append(req.app.state.lot_collection.update_one(
-            {"public_id" : {"$in": shipment['lot_id']}},
-            {"$push" : {"shipment_details": shipment['public_id']},
-            "$set": {"remaining_bora_count": {"$subtract": ["$remaining_bora_count", data["sent_bora_count"]]}}
-            }
-        ))
+                {"public_id": shipment['lot_id']},
+                [
+                    {
+                        "$set": {
+                            "remaining_bora_count": {
+                                "$subtract": ["$remaining_bora_count", data["sent_bora_count"]]
+                            },
+                            "shipment_details": {
+                                "$concatArrays": ["$shipment_details", [shipment["public_id"]]]
+                            }
+                        }
+                    }
+                ]
+            )
+        )   
     try:
         await req.app.state.shipment_collection.insert_many(data_objs)
-        result = await asyncio.gather(*tasks)
+        await asyncio.gather(*tasks)
         await req.app.state.deal_collection.update_one(
         {"public_id": public_deal_id},
         {"$set": {"status": SaudaStatus.IN_TRANSPORT.value, "updated_at": datetime.datetime.now(datetime.UTC)}}
@@ -547,21 +585,23 @@ async def create_shipment_batch(req: Request, public_deal_id: str, batch_insert:
     except Exception as e:
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail="Error batch updating shipment.")
     
-# Read - Done
+# Read 
 @app.post("/deals/{public_deal_id}/lots/{public_lot_id}/shipment/{public_shipment_id}/read") # Exact Shipment
 async def read_sinlge_shipment(req: Request, public_deal_id: str, public_lot_id: str, public_shipment_id: str) -> JSONResponse:
     try:
         result = await req.app.state.shipment_collection.find_one({"public_id": public_shipment_id},
                                                                   projection = {"_id": False, "created_at": False, "updated_at": False})
+        result2 = await req.app.state.lot_collection.find_one({"public_id": result['lot_id']}, {'_id': False, 'rice_lot_no': True, "total_bora_count": True, "shipped_bora_count": True, "remaining_bora_count": True})
         if result['bora_date']:
-            result['bora_data'] = str(result['bora_data'])
+            result['bora_date'] = str(result['bora_date'])
         if result['flap_sticker_date']:
             result['flap_sticker_date'] = str(result['flap_sticker_date'])
         if result['gate_pass_date']:
             result['gate_pass_date'] = str(result['gate_pass_date'])
-        return JSONResponse(content={"response": result},
+        final = result | result2
+        return JSONResponse(content={"response": final},
                             status_code=HTTP_200_OK)
-    except Exception:
+    except Exception as e:
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail="Error reading a single shipment detail.")
     
 @app.post("/deals/{public_deal_id}/lots/{public_lot_id}/shipment/read-lot")
@@ -571,28 +611,41 @@ async def read_all_lot_shipments(req: Request, public_deal_id: str, public_lot_i
                                                                   projection = {"_id": False, "created_at": False, "updated_at": False})
         final_result = []
         async for result in results:
+            result2 = await req.app.state.lot_collection.find_one({"public_id": result['lot_id']}, {'_id': False, 'rice_lot_no': True, "total_bora_count": True, "shipped_bora_count": True, "remaining_bora_count": True})
             if result['bora_date']:
-                result['bora_data'] = str(result['bora_data'])
+                result['bora_date'] = str(result['bora_date'])
             if result['flap_sticker_date']:
                 result['flap_sticker_date'] = str(result['flap_sticker_date'])
             if result['gate_pass_date']:
                 result['gate_pass_date'] = str(result['gate_pass_date'])
-            final_result.append(result)
-        return JSONResponse(content={"response": final_result},
+            final_result.append(result | result2)
+        return JSONResponse(content={"response": final_result}, 
                             status_code=HTTP_200_OK)
-    except Exception:
+    except Exception as e:
+        print(e)
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail="Error reading a single shipment detail.")
 
 
 @app.get("/deals/{public_deal_id}/lots/shipment/read-deal") # Read all shipments for a `SAUDA`
-async def read_all_deal_shipments(req: Request, public_deal_id: str) -> JSONResponse: # Read all the shipments for a `LOT`
-    try:
-        results = await req.app.state.shipment_collection.find({"sauda_id": public_deal_id},
-                                                                  projection = {"_id": False, "public_id": True, "lot_id": True, 'sauda_id': True}).to_list()
-        return JSONResponse(content={"response": results},
+async def read_all_deal_shipments(req: Request, public_deal_id: str) -> JSONResponse:
+    # try:
+        results = req.app.state.shipment_collection.find({"sauda_id": public_deal_id},
+                                                                  projection = {"_id": False, "created_at": False, "updated_at": False})
+        final_result = []
+        async for result in results:
+            result2 = await req.app.state.lot_collection.find_one({"public_id": result['lot_id']}, {'_id': False, 'rice_lot_no': True, "total_bora_count": True, "shipped_bora_count": True, "remaining_bora_count": True})
+            if result.get('bora_date', False):
+                result['bora_date'] = str(result['bora_date'])
+            if result.get('flap_sticker_date', False):
+                result['flap_sticker_date'] = str(result['flap_sticker_date'])
+            if result.get("gate_pass_date", False):
+                result['gate_pass_date'] = str(result['gate_pass_date'])
+            final_result.append(result | result2)
+        print(final_result)
+        return JSONResponse(content={"response": final_result}, 
                             status_code=HTTP_200_OK)
-    except Exception:
-        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail="Error reading a all shipment detail.")
+    # except Exception:
+    #     raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail="Error reading a all shipment detail.")
     
 # Update - Done
 @app.patch("/deals/lots/shipment/{public_shipment_id}/update") # Single Shipment details update.
@@ -601,8 +654,8 @@ async def update_single_shipment(req: Request, public_shipment_id: str, data: Sh
     try:
         res = await req.app.state.shipment_collection.update_one({"public_id": public_shipment_id},
                                                            {"$set": update_data})
-        if res["matched_count"] != 1:
-            raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail="Error updating the lot details with shipment data.")
+        # if res["matched_count"] != 1:
+        #     raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail="Error updating the lot details with shipment data.")
         return JSONResponse(content={"message": "Shipment Data updated successfully."}, status_code=HTTP_200_OK)
     except Exception as e:
         raise e
@@ -610,7 +663,7 @@ async def update_single_shipment(req: Request, public_shipment_id: str, data: Sh
 
 @app.patch("/deals/lots/shipment/update/batch-update") # Per Lot Shipment Updates
 async def update_multiple_shipments(req: Request, data: BatchShipmentUpdate)->JSONResponse:
-    update_data = {k: v for k, v in data.model_dump().items() if v is not None}
+    update_data = {k: v for k, v in data.update.model_dump().items() if v is not None}
     update_data['updated_at'] = datetime.datetime.now(datetime.UTC)
     try:
         result = await req.app.state.shipment_collection.update_many(
@@ -618,8 +671,8 @@ async def update_multiple_shipments(req: Request, data: BatchShipmentUpdate)->JS
             {"$set": update_data},
             upsert=False,
         )
-        if result['modified_count'] != len(data.public_ids):
-            raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail="Error updating multiple shipment data.")
+        # if result['modified_count'] != len(data.public_ids):
+        #     raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail="Error updating multiple shipment data.")
         return JSONResponse(content={"message": "Shipment created successfully and lot updated."})
     except Exception as e:
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail="Error batch updating shipment.")
@@ -629,8 +682,103 @@ async def update_multiple_shipments(req: Request, data: BatchShipmentUpdate)->JS
 @app.delete("/deals/{public_deal_id}/lots/{public_lot_id}/shipment/{public_shipment_id}/delete")
 async def delete_shipment(req: Request, public_deal_id: str, public_lot_id: str, public_shipment_id: str) -> JSONResponse:
     try:
+        b_count = await req.app.state.shipment_collection.find_one({"public_id": public_shipment_id, "lot_id": public_lot_id,}, projection={"_id": True, "sent_bora_count": True})
+        print(b_count)
         await req.app.state.shipment_collection.delete_one({"public_id": public_shipment_id, "lot_id": public_lot_id, "sauda_id": public_deal_id})
-        await req.app.state.lot_collection.update_one({"public_id": public_lot_id}, {"$pull": {"shipment_details": public_lot_id}})
+        await req.app.state.lot_collection.update_one({"public_id": public_lot_id}, {"$pull": {"shipment_details": public_lot_id}, "$inc": {"remaining_bora_count": b_count['sent_bora_count']}})
         return JSONResponse(content={"message": "Shipment details deleted successfully."}, status_code=HTTP_200_OK)
     except Exception:
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail="Unable to delete shipment details.")
+    
+
+# Delivery Status logic - need to implement shipment details like change bora counts
+@app.patch("/deals/update/lots/update-delivery-details")
+async def update_delivery_details(
+    req: Request, batch_update: BatchDeliveryUpdate
+) -> JSONResponse:
+    try:
+        rice_lot_nos = [d.rice_lot_no for d in batch_update.data]
+        lots_cursor = req.app.state.lot_collection.find(
+            {"rice_lot_no": {"$in": rice_lot_nos}},
+            projection={"public_id": True, "sauda_id": True, "rice_lot_no": True}
+        )
+        lots_map = {lot["rice_lot_no"]: lot async for lot in lots_cursor}
+
+        update_tasks = []
+        for d in batch_update.data:
+            if d.rice_lot_no in lots_map:
+                update_tasks.append(req.app.state.lot_collection.update_one(
+                    {"rice_lot_no": d.rice_lot_no},
+                    {"$set": {"rice_pass_date": d.rice_pass_date, "rice_deposit_centre": d.rice_deposit_centre, "qtl": d.qtl, "rice_bags_quantity": d.rice_bags_quantity, "moisture_cut": d.moisture_cut, "is_fully_shipped": True, "updated_at": datetime.datetime.now(datetime.UTC)}}
+                ))
+        
+        if len(update_tasks) != len(batch_update.data):
+             raise HTTPException(
+                status_code=HTTP_404_NOT_FOUND,
+                detail="Some lots were not parsed / found properly. FATAL ERROR",
+            )
+
+        await asyncio.gather(*update_tasks)
+
+        # calculation_tasks = []
+        # for d in batch_update.data:
+        #     if d.rice_lot_no in lots_map:
+        #         lot_info = lots_map[d.rice_lot_no]
+        #         calculation_tasks.append(
+        #             calculate_lot_nett_amount(lot_info["sauda_id"], lot_info["public_id"], req)
+        #         )
+        
+        # await asyncio.gather(*calculation_tasks)
+
+        return JSONResponse(
+            content={
+                "message": f"Batch Delivery Status Update Successful!"
+            },
+            status_code=HTTP_200_OK,
+        )
+    except Exception:
+        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail="Cannot update delivery status.")
+ 
+
+class CostEstimate(BaseModel):
+    qi_expense: Optional[float]
+    lot_dalali_expense: Optional[float]
+    other_expenses: Optional[float]
+    brokerage: Optional[float]
+
+class BatchCostEstimate(BaseModel):
+    public_lot_ids: List[str]
+    update: CostEstimate
+
+
+ 
+# TODO: Finish this one function
+async def calculate_lot_nett_amount(rate: float, total_bora_count: int, moisture_cut: float, qi_expense: float, lot_dalali_expense: float, other_expenses: float, brokerage: float) -> float:
+    gross_amount = total_bora_count * rate
+
+    total_expenses = qi_expense + lot_dalali_expense + other_expenses + brokerage + moisture_cut
+    
+    nett_amount = gross_amount - total_expenses
+    
+    return nett_amount
+
+
+
+@app.post("http://localhost:8000/deals/{public_deal_id}/lots/cost-estimation")
+async def batch_cost_estimate_lot(req: Request, public_deal_id: str, data: BatchCostEstimate) -> JSONResponse:
+    sauda_details = await req.app.state.deal_collection.find_one({"public_id": public_deal_id}, projection={"_id": False, "rate": True})
+    rate = sauda_details['rate']
+    cursor = req.app.state.lot_collection.find({"public_id": {"$in": data.public_lot_ids}}, projection={"_id": True, "total_bora_count": True, "moisture_cut": True, "qi_expense": True, "lot_dalali_expense": True, "other_expenses": True, "brokerage": True})
+    tasks = []
+    async for lot in cursor:
+        nett_amount = calculate_lot_nett_amount(
+            rate, lot.get("total_bora_count"), lot.get("moisture_cut", 0), lot.get("qi_expense", 0), lot.get("lot_dalali_expense", 0), lot.get("other_expenses", 0), lot.get("brokerage", 0)
+        )
+        tasks.append(req.app.state.lot_collection.update_one(
+            {"_id": lot['_id']},
+            {"$set": {"nett_amount": nett_amount}}
+        ))
+    try:
+        results = asyncio.gather(*tasks)
+    except Exception as e:
+        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail="Error calculating Nett amount.")
