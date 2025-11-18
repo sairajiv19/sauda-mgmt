@@ -9,6 +9,7 @@ from models import (
     LotModel,
     BrokerModel,
     ShipmentModel,
+    BrokerLedgerEntry,
 )
 from starlette.status import (
     HTTP_200_OK,
@@ -16,8 +17,8 @@ from starlette.status import (
     HTTP_404_NOT_FOUND,
     HTTP_500_INTERNAL_SERVER_ERROR,
 )
-from pydantic import BaseModel, Field
-from typing import Optional, List
+from pydantic import BaseModel, Field, ConfigDict
+from typing import Optional, List, Literal
 import datetime
 import uvicorn
 from contextlib import asynccontextmanager
@@ -73,28 +74,10 @@ class SaudaUpdate(BaseModel):
     )
 
 
-class ShipmentInput(BaseModel):
-    public_id: str = Field(..., description="Public IDs.")
-    lot_id: str = Field(..., description="Reference to Lot")
-    sent_bora_count: int = Field(..., ge=0, description="Total bora sent")
-    bora_date: Optional[datetime.datetime] = Field(None, description="Shipping date")
-    bora_via: Optional[str] = Field(None, description="Shipping method/vehicle")
-    flap_sticker_date: Optional[datetime.datetime] = Field(
-        None, description="Flap sticker date"
-    )
-    flap_sticker_via: Optional[str] = Field(None, description="Sticker batch info")
-    gate_pass_date: Optional[datetime.datetime] = Field(
-        None, description="Gate pass issue date"
-    )
-    gate_pass_via: Optional[str] = Field(None, description="Gate pass location")
 
 
 class LotUpdate(BaseModel):
     rice_lot_no: Optional[str] = Field(default=None, description="Rice lot number")
-    frk: Optional[bool] = Field(default=False, description="FRK status")
-    frk_bheja: Optional[FRKBhejaModel] = Field(
-        default=None, description="FRK shipment details"
-    )
     total_bora_count: Optional[int] = Field(
         default=None, ge=0, description="No. of Boras in a Lot."
     )
@@ -124,6 +107,7 @@ class LotUpdate(BaseModel):
 
 class BatchLotUpdate(BaseModel):
     public_lot_ids: List[str]
+    rice_lot_no: Optional[List[str]] = []
     update_data: LotUpdate
 
 
@@ -163,6 +147,7 @@ async def lifespan(app: FastAPI):
         app.state.lot_collection = sauda_database.get_collection("lot")
         app.state.shipment_collection = sauda_database.get_collection("shipment")
         app.state.broker_collection = sauda_database.get_collection("broker")
+        app.state.ledger_collection = sauda_database.get_collection("ledger") 
         print("Connected to MongoDB!")
         yield
     finally:
@@ -174,7 +159,7 @@ app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # or specify ["http://localhost:3000"] etc.
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -221,25 +206,40 @@ async def get_all_brokers(req: Request) -> JSONResponse:
     return JSONResponse({"response": brokers}, status_code=HTTP_200_OK)
 
 
-@app.get("/deals/read/{public_deal_id}/lot/all")  # For generating boxes
+
+@app.get("/brokers/read/{broker_id}/show-deals")
+async def get_all_broker_deals(req: Request, broker_id: str) -> JSONResponse:
+    brokers = await req.app.state.broker_collection.find_one(
+        {"broker_id": broker_id}, projection={"_id": False, "sauda_ids": True}
+    )
+    names = await req.app.state.deal_collection.find({"public_id": {"$in": brokers['sauda_ids']}}, projection={"_id": False, "name": True, "public_id": True}).to_list()
+    return JSONResponse({"response": names}, status_code=HTTP_200_OK)
+
+
+@app.get("/brokers/read/{broker_id}/ledger")
+async def get_ledger_data(req: Request, broker_id: str) -> JSONResponse:
+    entries = req.app.state.ledger_collection.find({"broker_id": broker_id}, projection={"_id": False})
+    total_entries = []
+    async for entry in entries:
+        entry['date'] = str(entry['date'])
+        total_entries.append(entry)
+    return JSONResponse(status_code=HTTP_200_OK, content={"response": total_entries})   
+
+
+
+@app.get("/deals/read/{public_deal_id}/lot/all")  # For generating tables
 async def get_all_deal_lots(req: Request, public_deal_id: str) -> JSONResponse:
     lots = await req.app.state.lot_collection.find(
         {"sauda_id": public_deal_id},
         projection={
             "_id": False,
-            "public_id": True,
-            "rice_lot_no": True,
-            "is_fully_shipped": True,
-            "remaining_bora_count": True,
-            "total_bora_count": True,
-            "qi_expense": True,
-            "lot_dalali_expense": True,
-            "other_expenses": True,
-            "brokerage": True,
-            "nett_amount": True,
-            "net_rice_bought": True,
-        },
+            "created_at": False,
+            "updated_at": False,
+        }, 
     ).to_list()
+    for lot in lots:
+        if lot["rice_pass_date"]:
+            lot["rice_pass_date"] = str(lot["rice_pass_date"])
     return JSONResponse(content={"response": lots}, status_code=HTTP_200_OK)
 
 
@@ -255,19 +255,12 @@ async def get_lot_details(
         raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Lot not found")
     if lot["rice_pass_date"]:
         lot["rice_pass_date"] = str(lot["rice_pass_date"])
-    if lot["frk"]:
-        if lot["frk_bheja"]:
-            if lot["frk_bheja"]["frk_date"]:
-                lot["frk_bheja"]["frk_date"] = str(lot["frk_bheja"]["frk_date"])
     return JSONResponse(content={"response": lot}, status_code=HTTP_200_OK)
 
 
 # Create Routes - Done
 @app.post("/deals/create/")
 async def create_deal(req: Request, deal: SaudaInput) -> JSONResponse:
-    # broker = await req.app.state.broker_collection.find_one({"broker_id": deal.broker_id})
-    # if not broker:
-    #     raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=f"Broker with id {deal.broker_id} not found")
 
     new_sauda = SaudaModel(**deal.model_dump())
     try:
@@ -285,7 +278,7 @@ async def create_deal(req: Request, deal: SaudaInput) -> JSONResponse:
     lots_to_create = []
     for i in range(deal.total_lots):
         new_lot = LotModel(sauda_id=new_sauda.public_id)
-        new_lot.rice_lot_no = f"Lot {i+1}"
+        new_lot.rice_lot_no = f"LOT{i+1}"
         lots_to_create.append(new_lot.model_dump(by_alias=True))
 
     try:
@@ -312,6 +305,9 @@ async def create_deal(req: Request, deal: SaudaInput) -> JSONResponse:
     )
 
 
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
 @app.post("/brokers/create/")
 async def create_broker(req: Request, broker: BrokerInput) -> JSONResponse:
     if await req.app.state.broker_collection.find_one({"broker_id": broker.broker_id}):
@@ -331,6 +327,36 @@ async def create_broker(req: Request, broker: BrokerInput) -> JSONResponse:
         },
         status_code=HTTP_201_CREATED,
     )
+
+
+class BrokerLedgerEntryInput(BaseModel):
+    deal_id: str = Field(..., description="Related Deal public ID")
+    deal_name: str
+    date: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(datetime.UTC)) # Omitted
+    entry_type: Literal["DEBIT","CREDIT","ADJUSTMENT"]
+    amount: float = Field(gt=0, description="Amount")
+    mode: str
+    remarks: Optional[str] = Field(None, description="Extra details that be added")
+    model_config=ConfigDict(
+        populate_by_name = True,
+        arbitrary_types_allowed = True,)
+
+
+@app.post("/brokers/{broker_id}/ledger-create")
+async def create_ledger_entry(req: Request, broker_id: str, entry: BrokerLedgerEntryInput) -> JSONResponse:
+    entry = BrokerLedgerEntry(broker_id=broker_id, **entry.model_dump())
+    await req.app.state.ledger_collection.insert_one(entry.model_dump(by_alias=True))
+    if entry.entry_type == "CREDIT":
+        await req.app.state.broker_collection.update_one({"broker_id": broker_id}, {"$inc": {"total_credits": entry.amount}})
+    elif entry.entry_type == "DEBIT":
+        await req.app.state.broker_collection.update_one({"broker_id": broker_id}, {"$inc": {"total_debits": entry.amount}})
+    else:
+        await req.app.state.broker_collection.update_one({"broker_id": broker_id}, {"$inc": {"total_debits": entry.amount, "total_credits": entry.amount}})
+    return JSONResponse(status_code=HTTP_200_OK, content={"message": "Entry Inserted Successfully!"})
+
+
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
 
 
 # Update Routes - Done
@@ -417,35 +443,27 @@ async def update_single_lot(
 async def update_batch_lot(
     req: Request, public_deal_id: str, batch_update: BatchLotUpdate
 ) -> JSONResponse:
-    cursor = req.app.state.lot_collection.find(
-        {"sauda_id": public_deal_id, "public_id": {"$in": batch_update.public_lot_ids}},
-        projection={"_id": True, "public_id": True},
-    )
-    lots = []
-    async for lot in cursor:
-        lots.append(lot)
-    if len(lots) != len(batch_update.public_lot_ids):
-        raise HTTPException(
-            status_code=HTTP_404_NOT_FOUND,
-            detail="Some lots are missing / don't exist. FATAL ERROR",
-        )
     update_data = {
         k: v for k, v in batch_update.update_data.model_dump().items() if v is not None
     }
     if update_data.get("total_bora_count", False):
         update_data["remaining_bora_count"] = update_data["total_bora_count"]
         await req.app.state.shipment_collection.delete_many(
-            {"lot_id": {"$in": [lot["public_id"] for lot in lots]}}
+            {"lot_id": {"$in": batch_update.public_lot_ids}}
         )  # Deleting shipments that were created with old total count to maintain data integrity.
     update_data["updated_at"] = datetime.datetime.now(datetime.UTC)
-
     try:
-
-        result = await req.app.state.lot_collection.update_many(
-            {"_id": {"$in": [lot["_id"] for lot in lots]}},
-            {"$set": update_data},
-            upsert=False,
-        )
+        if batch_update.rice_lot_no is None or len(batch_update.rice_lot_no) == 0:
+            result = await req.app.state.lot_collection.update_many(
+                {"public_id": {"$in": batch_update.public_lot_ids}},
+                {"$set": update_data},
+                upsert=False,
+            )
+        else:
+            results = []
+            for lottt, pub_id in zip(batch_update.rice_lot_no, batch_update.public_lot_ids):
+                results.append(req.app.state.lot_collection.update_one({"public_id": pub_id}, {"$set": update_data | {"rice_lot_no": lottt}}, upsert=False))
+            await asyncio.gather(*results)
     except Exception:
         raise HTTPException(
             HTTP_500_INTERNAL_SERVER_ERROR, "Cannot update the deals, mongodb error."
@@ -453,7 +471,7 @@ async def update_batch_lot(
 
     return JSONResponse(
         content={
-            "message": f"Batch lot update successful. Modified Lots Count: {result.modified_count}"
+            "message": f"Batch lot update successful."
         },
         status_code=HTTP_200_OK,
     )
@@ -509,13 +527,13 @@ async def delete_deal(req: Request, public_deal_id: str) -> JSONResponse:
     )
 
 
-# Shipment Crud
+# Shipment Crud ------------------------------------------------------------------------------------------------------------------------------------------------------
 
 
 class ShipmentInput(BaseModel):
     """Input model for creating a shipment"""
 
-    sent_bora_count: int = Field(..., ge=0, description="Total bora sent")
+    sent_bora_count: Optional[int] = Field(None, ge=0, description="Total bora sent")
     bora_date: Optional[datetime.datetime] = Field(None, description="Shipping date")
     bora_via: Optional[str] = Field(None, description="Shipping method/vehicle")
     flap_sticker_date: Optional[datetime.datetime] = Field(
@@ -526,6 +544,10 @@ class ShipmentInput(BaseModel):
         None, description="Gate pass issue date"
     )
     gate_pass_via: Optional[str] = Field(None, description="Gate pass location")
+    frk: Optional[bool] = Field(default=False, description="FRK status")
+    frk_bheja: Optional[FRKBhejaModel] = Field(
+        default=None, description="FRK shipment details"
+    )
 
 
 class ShipmentUpdate(BaseModel):
@@ -542,7 +564,11 @@ class ShipmentUpdate(BaseModel):
         None, description="Gate pass issue date"
     )
     gate_pass_via: Optional[str] = Field(None, description="Gate pass location")
-
+    frk: Optional[bool] = Field(default=False, description="FRK status")
+    frk_bheja: Optional[FRKBhejaModel] = Field(
+        default=None, description="FRK shipment details"
+    )
+ 
 
 class BatchShipmentInput(BaseModel):
     public_ids: List[str]
@@ -689,6 +715,8 @@ async def read_sinlge_shipment(
             result["flap_sticker_date"] = str(result["flap_sticker_date"])
         if result["gate_pass_date"]:
             result["gate_pass_date"] = str(result["gate_pass_date"])
+        if result['frk_bheja'].get('frk_date'):
+            result['frk_bheja']['frk_date'] = str(result['frk_bheja']['frk_date'])
         final = result | result2
         return JSONResponse(content={"response": final}, status_code=HTTP_200_OK)
     except Exception as e:
@@ -725,9 +753,11 @@ async def read_all_lot_shipments(
                 result["flap_sticker_date"] = str(result["flap_sticker_date"])
             if result["gate_pass_date"]:
                 result["gate_pass_date"] = str(result["gate_pass_date"])
+            if result['frk_bheja'].get('frk_date'):
+                result['frk_bheja']['frk_date'] = str(result['frk_bheja']['frk_date'])
             final_result.append(result | result2)
         return JSONResponse(content={"response": final_result}, status_code=HTTP_200_OK)
-    except Exception as e:
+    except Exception as e: 
         print(e)
         raise HTTPException(
             status_code=HTTP_500_INTERNAL_SERVER_ERROR,
@@ -762,8 +792,9 @@ async def read_all_deal_shipments(req: Request, public_deal_id: str) -> JSONResp
             result["flap_sticker_date"] = str(result["flap_sticker_date"])
         if result.get("gate_pass_date", False):
             result["gate_pass_date"] = str(result["gate_pass_date"])
+        if result['frk_bheja'].get('frk_date'):
+            result['frk_bheja']['frk_date'] = str(result['frk_bheja']['frk_date'])
         final_result.append(result | result2)
-    print(final_result)
     return JSONResponse(content={"response": final_result}, status_code=HTTP_200_OK)
 
 
@@ -783,8 +814,6 @@ async def update_single_shipment(
         res = await req.app.state.shipment_collection.update_one(
             {"public_id": public_shipment_id}, {"$set": update_data}
         )
-        # if res["matched_count"] != 1:
-        #     raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail="Error updating the lot details with shipment data.")
         return JSONResponse(
             content={"message": "Shipment Data updated successfully."},
             status_code=HTTP_200_OK,
@@ -805,8 +834,6 @@ async def update_multiple_shipments(
             {"$set": update_data},
             upsert=False,
         )
-        # if result['modified_count'] != len(data.public_ids):
-        #     raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail="Error updating multiple shipment data.")
         return JSONResponse(
             content={"message": "Shipment created successfully and lot updated."}
         )
@@ -832,7 +859,6 @@ async def delete_shipment(
             },
             projection={"_id": True, "sent_bora_count": True},
         )
-        print(b_count)
         await req.app.state.shipment_collection.delete_one(
             {
                 "public_id": public_shipment_id,
@@ -858,7 +884,7 @@ async def delete_shipment(
         )
 
 
-# Delivery Status logic - need to implement shipment details like change bora counts
+# Delivery Status logic
 @app.patch("/deals/update/lots/update-delivery-details")
 async def update_delivery_details(
     req: Request, batch_update: BatchDeliveryUpdate
@@ -877,7 +903,7 @@ async def update_delivery_details(
                 update_tasks.append(
                     req.app.state.lot_collection.update_one(
                         {"rice_lot_no": d.rice_lot_no},
-                        {
+                        [{
                             "$set": {
                                 "rice_pass_date": d.rice_pass_date,
                                 "rice_deposit_centre": d.rice_deposit_centre,
@@ -886,8 +912,10 @@ async def update_delivery_details(
                                 "moisture_cut": d.moisture_cut,
                                 "is_fully_shipped": True,
                                 "updated_at": datetime.datetime.now(datetime.UTC),
+                                "shipped_bora_count": "$remaining_bora_count",
+                                "remaining_bora_count": 0
                             }
-                        },
+                        }],
                     )
                 )
 
@@ -898,16 +926,6 @@ async def update_delivery_details(
             )
 
         await asyncio.gather(*update_tasks)
-
-        # calculation_tasks = []
-        # for d in batch_update.data:
-        #     if d.rice_lot_no in lots_map:
-        #         lot_info = lots_map[d.rice_lot_no]
-        #         calculation_tasks.append(
-        #             calculate_lot_nett_amount(lot_info["sauda_id"], lot_info["public_id"], req)
-        #         )
-
-        # await asyncio.gather(*calculation_tasks)
 
         return JSONResponse(
             content={"message": f"Batch Delivery Status Update Successful!"},
@@ -929,43 +947,46 @@ class CostEstimate(BaseModel):
 
 class BatchCostEstimate(BaseModel):
     public_lot_ids: List[str]
+    broker_id: str
     update: CostEstimate
 
 
-# TODO: Finish this one function
-async def calculate_lot_nett_amount(
+def calculate_lot_nett_amount( # Rate -> qtl * brokerage = total_brokerage
     rate: float,
-    total_bora_count: int,
+    qtl: int,
     moisture_cut: float,
     qi_expense: float,
     lot_dalali_expense: float,
     other_expenses: float,
     brokerage: float,
+    frk_qty: int = 0
 ) -> float:
-    gross_amount = total_bora_count * rate
+    if frk_qty > 0:
+        total_brokerage = (qtl - frk_qty) * brokerage
+    else:
+        total_brokerage = qtl * brokerage
+    gross_amount = qtl * rate
 
-    total_expenses = (
-        qi_expense + lot_dalali_expense + other_expenses + brokerage + moisture_cut
-    )
+    total_expenses = qi_expense + lot_dalali_expense + other_expenses  + moisture_cut + total_brokerage
 
     nett_amount = gross_amount - total_expenses
 
     return nett_amount
 
 
-@app.post("http://localhost:8000/deals/{public_deal_id}/lots/cost-estimation")
+@app.post("/deals/{public_deal_id}/lots/cost-estimation")
 async def batch_cost_estimate_lot(
     req: Request, public_deal_id: str, data: BatchCostEstimate
 ) -> JSONResponse:
     sauda_details = await req.app.state.deal_collection.find_one(
-        {"public_id": public_deal_id}, projection={"_id": False, "rate": True}
+        {"public_id": public_deal_id}, projection={"_id": False, "name": True, "rate": True}
     )
-    rate = sauda_details["rate"]
     cursor = req.app.state.lot_collection.find(
         {"public_id": {"$in": data.public_lot_ids}},
         projection={
             "_id": True,
-            "total_bora_count": True,
+            "public_id": True,
+            "qtl": True,
             "moisture_cut": True,
             "qi_expense": True,
             "lot_dalali_expense": True,
@@ -974,25 +995,251 @@ async def batch_cost_estimate_lot(
         },
     )
     tasks = []
+    total_nett_amount = 0
     async for lot in cursor:
+        frk_details = await req.app.state.shipment_collection.find_one({"lot_id": lot['public_id']}, projection={"_id": False, "frk": True, "frk_bheja": True})
+        if frk_details and frk_details.get("frk", False):
+            frk_bheja = frk_details.get('frk_bheja') or {}
+            frk_qty = frk_bheja.get("frk_qty", 0)
+        else:
+            frk_qty = 0
         nett_amount = calculate_lot_nett_amount(
-            rate,
-            lot.get("total_bora_count"),
-            lot.get("moisture_cut", 0),
-            lot.get("qi_expense", 0),
-            lot.get("lot_dalali_expense", 0),
-            lot.get("other_expenses", 0),
-            lot.get("brokerage", 0),
+            rate=sauda_details["rate"],
+            qtl=lot.get("qtl"),
+            moisture_cut=lot.get("moisture_cut", 0),
+            qi_expense=lot.get("qi_expense", 0),
+            lot_dalali_expense=lot.get("lot_dalali_expense", 0),
+            other_expenses=lot.get("other_expenses", 0),
+            brokerage=lot.get("brokerage", 0),
+            frk_qty=frk_qty
         )
+        total_nett_amount += nett_amount
         tasks.append(
             req.app.state.lot_collection.update_one(
-                {"_id": lot["_id"]}, {"$set": {"nett_amount": nett_amount}}
+                {"_id": lot["_id"]}, {"$set": {"nett_amount": nett_amount,
+                 "qi_expense": data.update.qi_expense,
+                 "lot_dalali_expense": data.update.lot_dalali_expense,
+                 "other_expenses": data.update.other_expenses,
+                 "brokerage": data.update.brokerage}}
             )
         )
     try:
-        results = asyncio.gather(*tasks)
+        results = await asyncio.gather(*tasks)
+        await req.app.state.ledger_collection.insert_one(
+            BrokerLedgerEntry(
+                broker_id=data.broker_id,
+                deal_id=public_deal_id,
+                deal_name=sauda_details['name'],
+                date=datetime.datetime.now(datetime.UTC),
+                entry_type='DEBIT',
+                amount=total_nett_amount,
+                remarks="Total Sauda value calculated." # Ask bhaiya
+            ).model_dump(by_alias=True)
+            )
+        await req.app.state.broker_collection.update_one({"broker_id": data.broker_id}, {"$inc": {"total_debits": total_nett_amount}})
     except Exception as e:
         raise HTTPException(
             status_code=HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error calculating Nett amount.",
         )
+
+
+
+
+##### Analytics
+
+@app.get("/deals/analytics")
+async def get_deals_analytics(req: Request) -> JSONResponse:
+    """Get analytics for all deals including bora, flap sticker, gate pass, and FRK progress"""
+    
+    try:
+    # Get all deals with their total_lots and name
+        deals = await req.app.state.deal_collection.find(
+            {},
+            projection={"public_id": 1, "total_lots": 1, "name": 1, "_id": 0}
+        ).to_list()
+        
+        if not deals:
+            return JSONResponse(
+                content={"response": []},
+                status_code=HTTP_200_OK
+            )
+        
+        # Extract sauda_ids for batch processing
+        sauda_ids = [deal["public_id"] for deal in deals]
+        deal_info = {
+            deal["public_id"]: {
+                "total_lots": deal["total_lots"],
+                "name": deal["name"]
+            } for deal in deals
+        }
+        
+        # Aggregation pipeline for all analytics
+        pipeline = [
+            # Match all lots for our deals
+            {
+                "$match": {
+                    "sauda_id": {"$in": sauda_ids}
+                }
+            },
+            # Lookup shipments for each lot
+            {
+                "$lookup": {
+                    "from": "shipment",
+                    "localField": "public_id",
+                    "foreignField": "lot_id",
+                    "as": "shipments"
+                }
+            },
+            # Unwind shipments (one doc per shipment, keep empty lots)
+            {
+                "$unwind": {
+                    "path": "$shipments",
+                    "preserveNullAndEmptyArrays": True
+                }
+            },
+            # Group by sauda_id and lot to get lot-level statistics
+            {
+                "$group": {
+                    "_id": {
+                        "sauda_id": "$sauda_id",
+                        "lot_id": "$public_id"
+                    },
+                    "shipped_bora": {"$first": "$shipped_bora_count"},
+                    "total_bora": {"$first": "$total_bora_count"},
+                    # Check if any shipment for this lot has flap sticker complete
+                    "has_flap_sticker": {
+                        "$max": {
+                            "$cond": [
+                                {
+                                    "$and": [
+                                        {"$ne": ["$shipments.flap_sticker_date", None]},
+                                        {"$ne": ["$shipments.flap_sticker_via", None]}
+                                    ]
+                                },
+                                1,
+                                0
+                            ]
+                        }
+                    },
+                    # Check if any shipment for this lot has gate pass complete
+                    "has_gate_pass": {
+                        "$max": {
+                            "$cond": [
+                                {
+                                    "$and": [
+                                        {"$ne": ["$shipments.gate_pass_date", None]},
+                                        {"$ne": ["$shipments.gate_pass_via", None]}
+                                    ]
+                                },
+                                1,
+                                0
+                            ]
+                        }
+                    },
+                    # Track if lot has any FRK shipment
+                    "has_frk_enabled": {
+                        "$max": {
+                            "$cond": [
+                                {"$eq": ["$shipments.frk", True]},
+                                1,
+                                0
+                            ]
+                        }
+                    },
+                    # Check if any shipment for this lot has FRK complete (all fields)
+                    "has_frk_complete": {
+                        "$max": {
+                            "$cond": [
+                                {
+                                    "$and": [
+                                        {"$eq": ["$shipments.frk", True]},
+                                        {"$ne": ["$shipments.frk_bheja", None]},
+                                        {"$ne": ["$shipments.frk_bheja.frk_date", None]},
+                                        {"$ne": ["$shipments.frk_bheja.frk_via", None]},
+                                        {"$ne": ["$shipments.frk_bheja.frk_truck_no", None]},
+                                        {"$ne": ["$shipments.frk_bheja.frk_transporter", None]},
+                                        {"$ne": ["$shipments.frk_bheja.frk_bora_count", None]}
+                                    ]
+                                },
+                                1,
+                                0
+                            ]
+                        }
+                    }
+                }
+            },
+            # Group by sauda_id to get deal-level statistics
+            {
+                "$group": {
+                    "_id": "$_id.sauda_id",
+                    "total_shipped_bora": {"$sum": "$shipped_bora"},
+                    "total_bora": {"$sum": "$total_bora"},
+                    "flap_sticker_completed_lots": {"$sum": "$has_flap_sticker"},
+                    "gate_pass_completed_lots": {"$sum": "$has_gate_pass"},
+                    "frk_enabled_lots": {"$sum": "$has_frk_enabled"},
+                    "frk_completed_lots": {"$sum": "$has_frk_complete"}
+                }
+            }
+        ]
+        
+        # Execute aggregation
+        cursor = await req.app.state.lot_collection.aggregate(pipeline)
+        analytics_results = await cursor.to_list(length=None)
+        
+        # Format response for each deal
+        response = []
+        for deal_id, info in deal_info.items():
+            # Find analytics for this deal
+            deal_analytics = next(
+                (result for result in analytics_results if result["_id"] == deal_id),
+                None
+            )
+            
+            if deal_analytics:
+                deal_response = {
+                    "sauda_id": deal_id,
+                    "sauda_name": info["name"],
+                    "bora_progress": {
+                        "shipped": deal_analytics["total_shipped_bora"] or 0,
+                        "total": deal_analytics["total_bora"] or 0
+                    },
+                    "flap_sticker_progress": {
+                        "completed": deal_analytics["flap_sticker_completed_lots"],
+                        "total": info["total_lots"]
+                    },
+                    "gate_pass_progress": {
+                        "completed": deal_analytics["gate_pass_completed_lots"],
+                        "total": info["total_lots"]
+                    }
+                }
+                
+                # Only include FRK progress if at least one lot has FRK enabled
+                if deal_analytics["frk_enabled_lots"] > 0:
+                    deal_response["frk_progress"] = {
+                        "completed": deal_analytics["frk_completed_lots"],
+                        "total": info["total_lots"]
+                    }
+                
+                response.append(deal_response)
+            else:
+                # No lots or shipments yet for this deal
+                response.append({
+                    "sauda_id": deal_id,
+                    "sauda_name": info["name"],
+                    "bora_progress": {"shipped": 0, "total": 0},
+                    "flap_sticker_progress": {"completed": 0, "total": info["total_lots"]},
+                    "gate_pass_progress": {"completed": 0, "total": info["total_lots"]}
+                })
+        
+        return JSONResponse(
+            content={"response": response},
+            status_code=HTTP_200_OK
+        )
+        
+    except Exception as e:
+        return JSONResponse(
+            content={"message": f"Failed to fetch analytics: {str(e)}"},
+            status_code=HTTP_500_INTERNAL_SERVER_ERROR
+        )
+ 

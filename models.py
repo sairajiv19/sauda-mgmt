@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, ConfigDict
-from typing import Optional, List, TypedDict
+from typing import Optional, List, TypedDict, Literal
 import datetime
 from bson import ObjectId
 from enum import Enum
@@ -17,12 +17,31 @@ class SaudaStatus(str, Enum):
 def public_id_str():
     return str(uuid4())
 
+
+class BrokerLedgerEntry(BaseModel):
+    id: Optional[ObjectId] = Field(default_factory=ObjectId, alias="_id") # Omitted
+    broker_id: str = Field(..., description="User given Broker ID")
+    deal_id: str = Field(..., description="Related Deal public ID")
+    deal_name: str = None
+    date: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(datetime.UTC)) # Omitted
+    entry_type: Literal["DEBIT","CREDIT","ADJUSTMENT"]
+    amount: float = Field(gt=0, description="Amount")
+    mode: Optional[str] = ""
+    remarks: Optional[str] = Field("", description="Extra details that be added")
+    model_config=ConfigDict(
+        populate_by_name = True,
+        arbitrary_types_allowed = True,
+        json_encoders = {ObjectId: str})
+
+
 class BrokerModel(BaseModel):
     """Broker Collection Model"""
     id: Optional[ObjectId] = Field(default_factory=ObjectId, alias="_id") # Omitted
     broker_id: str = Field(..., description="User given Broker ID")
     name: str = Field(..., description="Broker name")
-    sauda_ids: List[str] = Field(default_factory=list, description="Linked saudas")
+    sauda_ids: List[str] = Field(default_factory=list, description="Linked public saudas")
+    total_debits: float = 0.0
+    total_credits: float = 0.0
     created_at: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(datetime.UTC)) # Omitted
     updated_at: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(datetime.UTC)) # Omitted
 
@@ -68,13 +87,15 @@ class ShipmentModel(BaseModel):
     public_id: str = Field(default_factory=public_id_str, description="Public ID.")
     lot_id: str = Field(..., description="Reference to public Lot Id")
     sauda_id: str = Field(..., description="Reference to public Sauda Id")
-    sent_bora_count: int = Field(..., ge=0, description="Total bora sent")
+    sent_bora_count: Optional[int] = Field(..., ge=0, description="Total bora sent")
     bora_date: Optional[datetime.datetime] = Field(None, description="Shipping date")
     bora_via: Optional[str] = Field(None, description="Shipping method/vehicle")
     flap_sticker_date: Optional[datetime.datetime] = Field(None, description="Flap sticker date")
     flap_sticker_via: Optional[str] = Field(None, description="Sticker batch info")
     gate_pass_date: Optional[datetime.datetime] = Field(None, description="Gate pass issue date")
     gate_pass_via: Optional[str] = Field(None, description="Gate pass location")
+    frk: bool = Field(default=False, description="FRK status")
+    frk_bheja: Optional[FRKBhejaModel] = Field(None, description="FRK shipment details")
     created_at: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(datetime.UTC))
     updated_at: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(datetime.UTC))
 
@@ -91,13 +112,11 @@ class LotModel(BaseModel):
     sauda_id: str = Field(..., description="Reference to parent public sauda id")
     rice_lot_no: Optional[str] = Field(default=None, description="Rice lot number")
 
-    # FRK and Gate Pass
-    frk: bool = Field(default=False, description="FRK status")
-    frk_bheja: Optional[FRKBhejaModel] = Field(None, description="FRK shipment details")
+
     shipment_details: Optional[List[str]] = Field(default_factory=list, description="The public ids of the shippment details.")
-    total_bora_count: Optional[int] = Field(default=0, ge=0, description="No. of Boras in a Lot.")
+    total_bora_count: Optional[int] = Field(default=580, ge=0, description="No. of Boras in a Lot.")
     shipped_bora_count: Optional[int] = None
-    remaining_bora_count: Optional[int] = None
+    remaining_bora_count: Optional[int] = Field(default=580, ge=0, description="No. of Boras in a Lot.")
     is_fully_shipped: bool = Field(default=False, description="Whether the lot is fully shipped or not.")
 
     # Govt Website Data
