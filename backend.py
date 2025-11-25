@@ -20,7 +20,6 @@ from starlette.status import (
 from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, List, Literal
 import datetime
-import uvicorn
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
@@ -142,7 +141,7 @@ async def lifespan(app: FastAPI):
             maxPoolSize=150,
             minPoolSize=8,
         )
-        sauda_database = mongodb_client.get_database("sauda")
+        sauda_database = mongodb_client.get_database("sauda-demo")
         app.state.deal_collection = sauda_database.get_collection("deal")
         app.state.lot_collection = sauda_database.get_collection("lot")
         app.state.shipment_collection = sauda_database.get_collection("shipment")
@@ -242,6 +241,20 @@ async def get_all_deal_lots(req: Request, public_deal_id: str) -> JSONResponse:
             lot["rice_pass_date"] = str(lot["rice_pass_date"])
     return JSONResponse(content={"response": lots}, status_code=HTTP_200_OK)
 
+
+@app.get("/deals/read/lot/{public_lot_id}") # For MCP use only
+async def get_lot_details(
+    req: Request, public_lot_id: str
+) -> JSONResponse:  # Bug fix - shipment details error
+    lot = await req.app.state.lot_collection.find_one(
+        {"public_id": public_lot_id},
+        projection={"_id": False, "created_at": False, "updated_at": False},
+    )
+    if not lot:
+        raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Lot not found")
+    if lot["rice_pass_date"]:
+        lot["rice_pass_date"] = str(lot["rice_pass_date"])
+    return JSONResponse(content={"response": lot}, status_code=HTTP_200_OK)
 
 @app.get("/deals/read/{public_deal_id}/lot/{public_lot_id}")
 async def get_lot_details(
@@ -446,7 +459,9 @@ async def update_batch_lot(
     update_data = {
         k: v for k, v in batch_update.update_data.model_dump().items() if v is not None
     }
-    if update_data.get("total_bora_count", False):
+    print(update_data)
+    if update_data.get("total_bora_count", None) is not None:
+        print("if triggered") 
         update_data["remaining_bora_count"] = update_data["total_bora_count"]
         await req.app.state.shipment_collection.delete_many(
             {"lot_id": {"$in": batch_update.public_lot_ids}}
@@ -792,8 +807,9 @@ async def read_all_deal_shipments(req: Request, public_deal_id: str) -> JSONResp
             result["flap_sticker_date"] = str(result["flap_sticker_date"])
         if result.get("gate_pass_date", False):
             result["gate_pass_date"] = str(result["gate_pass_date"])
-        if result['frk_bheja'].get('frk_date'):
-            result['frk_bheja']['frk_date'] = str(result['frk_bheja']['frk_date'])
+        if result.get('frk_bheja'):
+            if result.get('frk_bheja').get('frk_date'):
+                result['frk_bheja']['frk_date'] = str(result['frk_bheja']['frk_date'])
         final_result.append(result | result2)
     return JSONResponse(content={"response": final_result}, status_code=HTTP_200_OK)
 
@@ -851,7 +867,7 @@ async def update_multiple_shipments(
 async def delete_shipment(
     req: Request, public_deal_id: str, public_lot_id: str, public_shipment_id: str
 ) -> JSONResponse:
-    try:
+
         b_count = await req.app.state.shipment_collection.find_one(
             {
                 "public_id": public_shipment_id,
@@ -870,72 +886,72 @@ async def delete_shipment(
             {"public_id": public_lot_id},
             {
                 "$pull": {"shipment_details": public_lot_id},
-                "$inc": {"remaining_bora_count": b_count["sent_bora_count"]},
+                "$inc": {"remaining_bora_count": b_count.get("sent_bora_count", 0)},
             },
         )
         return JSONResponse(
             content={"message": "Shipment details deleted successfully."},
             status_code=HTTP_200_OK,
         )
-    except Exception:
-        raise HTTPException(
-            status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Unable to delete shipment details.",
-        )
+    # except Exception:
+    #     raise HTTPException(
+    #         status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+    #         detail="Unable to delete shipment details.",
+    #     )
 
 
-# Delivery Status logic
+# Delivery Status logic - Remove the logic as this will move to the main page and update bora count when creating shipment
 @app.patch("/deals/update/lots/update-delivery-details")
 async def update_delivery_details(
     req: Request, batch_update: BatchDeliveryUpdate
 ) -> JSONResponse:
-    try:
-        rice_lot_nos = [d.rice_lot_no for d in batch_update.data]
-        lots_cursor = req.app.state.lot_collection.find(
-            {"rice_lot_no": {"$in": rice_lot_nos}},
-            projection={"public_id": True, "sauda_id": True, "rice_lot_no": True},
-        )
-        lots_map = {lot["rice_lot_no"]: lot async for lot in lots_cursor}
+    # try:
+    rice_lot_nos = [d.rice_lot_no for d in batch_update.data]
+    lots_cursor = req.app.state.lot_collection.find(
+        {"rice_lot_no": {"$in": rice_lot_nos}},
+        projection={"public_id": True, "sauda_id": True, "rice_lot_no": True},
+    )
+    lots_map = {lot["rice_lot_no"]: lot async for lot in lots_cursor} 
 
-        update_tasks = []
-        for d in batch_update.data:
-            if d.rice_lot_no in lots_map:
-                update_tasks.append(
-                    req.app.state.lot_collection.update_one(
-                        {"rice_lot_no": d.rice_lot_no},
-                        [{
-                            "$set": {
-                                "rice_pass_date": d.rice_pass_date,
-                                "rice_deposit_centre": d.rice_deposit_centre,
-                                "qtl": d.qtl,
-                                "rice_bags_quantity": d.rice_bags_quantity,
-                                "moisture_cut": d.moisture_cut,
-                                "is_fully_shipped": True,
-                                "updated_at": datetime.datetime.now(datetime.UTC),
-                                "shipped_bora_count": "$remaining_bora_count",
-                                "remaining_bora_count": 0
-                            }
-                        }],
-                    )
+    update_tasks = []
+    for d in batch_update.data:
+        if d.rice_lot_no in lots_map:
+            update_tasks.append(
+                req.app.state.lot_collection.update_one(
+                    {"rice_lot_no": d.rice_lot_no},
+                    [{
+                        "$set": {
+                            "rice_pass_date": d.rice_pass_date,
+                            "rice_deposit_centre": d.rice_deposit_centre,
+                            "qtl": d.qtl,
+                            "rice_bags_quantity": d.rice_bags_quantity,
+                            "moisture_cut": d.moisture_cut,
+                            "is_fully_shipped": True,
+                            "updated_at": datetime.datetime.now(datetime.UTC),
+                            "shipped_bora_count": "$remaining_bora_count",
+                            "remaining_bora_count": 0
+                        }
+                    }],
                 )
-
-        if len(update_tasks) != len(batch_update.data):
-            raise HTTPException(
-                status_code=HTTP_404_NOT_FOUND,
-                detail="Some lots were not parsed / found properly. FATAL ERROR",
             )
 
-        await asyncio.gather(*update_tasks)
+    # if len(update_tasks) != len(batch_update.data):
+    #     raise HTTPException(
+    #         status_code=HTTP_404_NOT_FOUND,
+    #         detail="Some lots were not parsed / found properly. FATAL ERROR",
+    #     )
 
-        return JSONResponse(
-            content={"message": f"Batch Delivery Status Update Successful!"},
-            status_code=HTTP_200_OK,
-        )
-    except Exception:
-        raise HTTPException(
-            status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Cannot update delivery status.",
-        )
+    await asyncio.gather(*update_tasks)
+
+    return JSONResponse(
+        content={"message": f"Batch Delivery Status Update Successful!"},
+        status_code=HTTP_200_OK,
+    )
+    # except Exception:
+    #     raise HTTPException(
+    #         status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+    #         detail="Cannot update delivery status.",
+    #     )
 
 
 class CostEstimate(BaseModel):

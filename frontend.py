@@ -246,7 +246,7 @@ class TradingDashboard:
         tk.Label(header, text="Saudas (Deals) Management", font=('Arial', 20, 'bold'),
                 bg='white').pack(side=tk.LEFT)
         
-        tk.Button(header, text="+ Add Sauda", command=self.add_sauda_form,
+        tk.Button(header, text="+ Add Deal", command=self.add_sauda_form,
                  bg='#27ae60', fg='white', font=('Arial', 11, 'bold'),
                  padx=20, pady=8, cursor='hand2').pack(side=tk.RIGHT)
         
