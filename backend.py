@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.requests import Request
+import os
 from fastapi.responses import JSONResponse
 from pymongo.asynchronous.mongo_client import AsyncMongoClient
 from models import (
@@ -135,7 +136,7 @@ class StatusUpdate(BaseModel):
 async def lifespan(app: FastAPI):
     try:
         mongodb_client = AsyncMongoClient(
-            "mongodb://localhost:27017/",
+            os.getenv("MONGO_URL", "mongodb://localhost:27017/"),
             connect=True,
             maxConnecting=5,
             maxPoolSize=150,
@@ -155,7 +156,6 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -182,7 +182,7 @@ async def get_all_deals(req: Request) -> JSONResponse:
     return JSONResponse(content={"response": deals}, status_code=HTTP_200_OK)
 
 
-@app.get("/deals/read/{public_lot_id}")
+@app.get("/deals/read/{public_lot_id}") 
 async def get_single_deal(req: Request, public_lot_id: str) -> JSONResponse:
     deal = await req.app.state.deal_collection.find_one(
         {"public_id": public_lot_id},
@@ -730,7 +730,7 @@ async def read_sinlge_shipment(
             result["flap_sticker_date"] = str(result["flap_sticker_date"])
         if result["gate_pass_date"]:
             result["gate_pass_date"] = str(result["gate_pass_date"])
-        if result['frk_bheja'].get('frk_date'):
+        if result.get('frk_bheja', {}).get('frk_date'):
             result['frk_bheja']['frk_date'] = str(result['frk_bheja']['frk_date'])
         final = result | result2
         return JSONResponse(content={"response": final}, status_code=HTTP_200_OK)
@@ -900,7 +900,7 @@ async def delete_shipment(
     #     )
 
 
-# Delivery Status logic - Remove the logic as this will move to the main page and update bora count when creating shipment
+# Delivery Status logic - Remove the logic as this will move to the main page and bora count to be updated when creating shipment
 @app.patch("/deals/update/lots/update-delivery-details")
 async def update_delivery_details(
     req: Request, batch_update: BatchDeliveryUpdate
