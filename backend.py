@@ -1066,39 +1066,38 @@ async def batch_cost_estimate_lot(
 
 @app.get("/deals/analytics")
 async def get_deals_analytics(req: Request) -> JSONResponse:
-    """Get analytics for all deals including bora, flap sticker, gate pass, and FRK progress"""
-    
+    """
+    Get analytics for all deals including bora, flap sticker, gate pass, and FRK progress
+    """
+
     try:
-    # Get all deals with their total_lots and name
+        # Fetch all deals
         deals = await req.app.state.deal_collection.find(
             {},
             projection={"public_id": 1, "total_lots": 1, "name": 1, "_id": 0}
         ).to_list()
-        
+
         if not deals:
-            return JSONResponse(
-                content={"response": []},
-                status_code=HTTP_200_OK
-            )
-        
-        # Extract sauda_ids for batch processing
+            return JSONResponse(content={"response": []}, status_code=HTTP_200_OK)
+
         sauda_ids = [deal["public_id"] for deal in deals]
         deal_info = {
             deal["public_id"]: {
                 "total_lots": deal["total_lots"],
                 "name": deal["name"]
-            } for deal in deals
+            }
+            for deal in deals
         }
-        
-        # Aggregation pipeline for all analytics
+
         pipeline = [
-            # Match all lots for our deals
+            # Match lots belonging to these deals
             {
                 "$match": {
                     "sauda_id": {"$in": sauda_ids}
                 }
             },
-            # Lookup shipments for each lot
+
+            # Lookup shipments (ARRAY — no unwind)
             {
                 "$lookup": {
                     "from": "shipment",
@@ -1107,90 +1106,126 @@ async def get_deals_analytics(req: Request) -> JSONResponse:
                     "as": "shipments"
                 }
             },
-            # Unwind shipments (one doc per shipment, keep empty lots)
+
+            # Compute per-lot completion flags
             {
-                "$unwind": {
-                    "path": "$shipments",
-                    "preserveNullAndEmptyArrays": True
-                }
-            },
-            # Group by sauda_id and lot to get lot-level statistics
-            {
-                "$group": {
-                    "_id": {
-                        "sauda_id": "$sauda_id",
-                        "lot_id": "$public_id"
-                    },
-                    "shipped_bora": {"$first": "$shipped_bora_count"},
-                    "total_bora": {"$first": "$total_bora_count"},
-                    # Check if any shipment for this lot has flap sticker complete
+                "$addFields": {
+                    # Flap sticker completed if ANY shipment has both fields
                     "has_flap_sticker": {
-                        "$max": {
-                            "$cond": [
-                                {
-                                    "$and": [
-                                        {"$ne": ["$shipments.flap_sticker_date", None]},
-                                        {"$ne": ["$shipments.flap_sticker_via", None]}
-                                    ]
-                                },
-                                1,
-                                0
-                            ]
-                        }
+                        "$cond": [
+                            {
+                                "$gt": [
+                                    {
+                                        "$size": {
+                                            "$filter": {
+                                                "input": "$shipments",
+                                                "as": "s",
+                                                "cond": {
+                                                    "$and": [
+                                                        {"$ne": ["$$s.flap_sticker_date", None]},
+                                                        {"$ne": ["$$s.flap_sticker_via", None]}
+                                                    ]
+                                                }
+                                            }
+                                        }
+                                    },
+                                    0
+                                ]
+                            },
+                            1,
+                            0
+                        ]
                     },
-                    # Check if any shipment for this lot has gate pass complete
+
+                    # Gate pass completed if ANY shipment has both fields
                     "has_gate_pass": {
-                        "$max": {
-                            "$cond": [
-                                {
-                                    "$and": [
-                                        {"$ne": ["$shipments.gate_pass_date", None]},
-                                        {"$ne": ["$shipments.gate_pass_via", None]}
-                                    ]
-                                },
-                                1,
-                                0
-                            ]
-                        }
+                        "$cond": [
+                            {
+                                "$gt": [
+                                    {
+                                        "$size": {
+                                            "$filter": {
+                                                "input": "$shipments",
+                                                "as": "s",
+                                                "cond": {
+                                                    "$and": [
+                                                        {"$ne": ["$$s.gate_pass_date", None]},
+                                                        {"$ne": ["$$s.gate_pass_via", None]}
+                                                    ]
+                                                }
+                                            }
+                                        }
+                                    },
+                                    0
+                                ]
+                            },
+                            1,
+                            0
+                        ]
                     },
-                    # Track if lot has any FRK shipment
+
+                    # FRK enabled if ANY shipment has frk = true
                     "has_frk_enabled": {
-                        "$max": {
-                            "$cond": [
-                                {"$eq": ["$shipments.frk", True]},
-                                1,
-                                0
-                            ]
-                        }
+                        "$cond": [
+                            {
+                                "$gt": [
+                                    {
+                                        "$size": {
+                                            "$filter": {
+                                                "input": "$shipments",
+                                                "as": "s",
+                                                "cond": {"$eq": ["$$s.frk", True]}
+                                            }
+                                        }
+                                    },
+                                    0
+                                ]
+                            },
+                            1,
+                            0
+                        ]
                     },
-                    # Check if any shipment for this lot has FRK complete (all fields)
+
+                    # FRK completed if ANY shipment has full FRK bheja details
                     "has_frk_complete": {
-                        "$max": {
-                            "$cond": [
-                                {
-                                    "$and": [
-                                        {"$eq": ["$shipments.frk", True]},
-                                        {"$ne": ["$shipments.frk_bheja", None]},
-                                        {"$ne": ["$shipments.frk_bheja.frk_date", None]},
-                                        {"$ne": ["$shipments.frk_bheja.frk_via", None]},
-                                        {"$ne": ["$shipments.frk_bheja.frk_truck_no", None]},
-                                        {"$ne": ["$shipments.frk_bheja.frk_transporter", None]},
-                                        {"$ne": ["$shipments.frk_bheja.frk_bora_count", None]}
-                                    ]
-                                },
-                                1,
-                                0
-                            ]
-                        }
+                        "$cond": [
+                            {
+                                "$gt": [
+                                    {
+                                        "$size": {
+                                            "$filter": {
+                                                "input": "$shipments",
+                                                "as": "s",
+                                                "cond": {
+                                                    "$and": [
+                                                        {"$eq": ["$$s.frk", True]},
+                                                        {"$ne": ["$$s.frk_bheja", None]},
+                                                        {"$ne": ["$$s.frk_bheja.frk_date", None]},
+                                                        {"$ne": ["$$s.frk_bheja.frk_via", None]},
+                                                        {"$ne": ["$$s.frk_bheja.frk_truck_no", None]},
+                                                        {"$ne": ["$$s.frk_bheja.frk_transporter", None]},
+                                                        {"$ne": ["$$s.frk_bheja.frk_bora_count", None]}
+                                                    ]
+                                                }
+                                            }
+                                        }
+                                    },
+                                    0
+                                ]
+                            },
+                            1,
+                            0
+                        ]
                     }
                 }
             },
-            # Group by sauda_id to get deal-level statistics
+
+            # Aggregate per deal
             {
                 "$group": {
-                    "_id": "$_id.sauda_id",
-                    "total_shipped_bora": {"$sum": "$shipped_bora"},
-                    "total_bora": {"$sum": "$total_bora"},
+                    "_id": "$sauda_id",
+                    "total_shipped_bora": {"$sum": "$shipped_bora_count"},
+                    "total_bora": {"$sum": "$total_bora_count"},
                     "flap_sticker_completed_lots": {"$sum": "$has_flap_sticker"},
                     "gate_pass_completed_lots": {"$sum": "$has_gate_pass"},
                     "frk_enabled_lots": {"$sum": "$has_frk_enabled"},
@@ -1198,48 +1233,43 @@ async def get_deals_analytics(req: Request) -> JSONResponse:
                 }
             }
         ]
-        
-        # Execute aggregation
+
         cursor = await req.app.state.lot_collection.aggregate(pipeline)
         analytics_results = await cursor.to_list(length=None)
-        
-        # Format response for each deal
+
         response = []
         for deal_id, info in deal_info.items():
-            # Find analytics for this deal
-            deal_analytics = next(
-                (result for result in analytics_results if result["_id"] == deal_id),
+            analytics = next(
+                (a for a in analytics_results if a["_id"] == deal_id),
                 None
             )
-            
-            if deal_analytics:
+
+            if analytics:
                 deal_response = {
                     "sauda_id": deal_id,
                     "sauda_name": info["name"],
                     "bora_progress": {
-                        "shipped": deal_analytics["total_shipped_bora"] or 0,
-                        "total": deal_analytics["total_bora"] or 0
+                        "shipped": analytics.get("total_shipped_bora", 0),
+                        "total": analytics.get("total_bora", 0)
                     },
                     "flap_sticker_progress": {
-                        "completed": deal_analytics["flap_sticker_completed_lots"],
+                        "completed": analytics["flap_sticker_completed_lots"],
                         "total": info["total_lots"]
                     },
                     "gate_pass_progress": {
-                        "completed": deal_analytics["gate_pass_completed_lots"],
+                        "completed": analytics["gate_pass_completed_lots"],
                         "total": info["total_lots"]
                     }
                 }
-                
-                # Only include FRK progress if at least one lot has FRK enabled
-                if deal_analytics["frk_enabled_lots"] > 0:
+
+                if analytics["frk_enabled_lots"] > 0:
                     deal_response["frk_progress"] = {
-                        "completed": deal_analytics["frk_completed_lots"],
+                        "completed": analytics["frk_completed_lots"],
                         "total": info["total_lots"]
                     }
-                
+
                 response.append(deal_response)
             else:
-                # No lots or shipments yet for this deal
                 response.append({
                     "sauda_id": deal_id,
                     "sauda_name": info["name"],
@@ -1247,15 +1277,11 @@ async def get_deals_analytics(req: Request) -> JSONResponse:
                     "flap_sticker_progress": {"completed": 0, "total": info["total_lots"]},
                     "gate_pass_progress": {"completed": 0, "total": info["total_lots"]}
                 })
-        
-        return JSONResponse(
-            content={"response": response},
-            status_code=HTTP_200_OK
-        )
-        
+
+        return JSONResponse(content={"response": response}, status_code=HTTP_200_OK)
+
     except Exception as e:
         return JSONResponse(
             content={"message": f"Failed to fetch analytics: {str(e)}"},
             status_code=HTTP_500_INTERNAL_SERVER_ERROR
         )
- 
